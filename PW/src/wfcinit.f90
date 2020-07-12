@@ -182,6 +182,8 @@ SUBROUTINE init_wfc ( ik )
                                    nbgrp, root_bgrp_id
   USE mp,                   ONLY : mp_bcast
   USE funct,                ONLY : dft_is_hybrid, stop_exx
+  !! according to Felipe
+  USE mp_world,             ONLY : mpime
   !
   IMPLICIT NONE
   !

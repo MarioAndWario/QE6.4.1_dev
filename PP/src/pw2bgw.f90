@@ -653,7 +653,7 @@ CONTAINS
     ! In noncollinear case, nspin = 4, npol = 2
     ! [ IMPORTANT ] nspin = 2 ==> proc_wf = .TRUE.
 
-    write(*,*) "nspin = ", nspin, " npol = ", npol
+    ! write(*,*) "nspin = ", nspin, " npol = ", npol
 
     IF ( real_or_complex .EQ. 1 .OR. nspin .EQ. 2 ) THEN
        proc_wf = .TRUE.
