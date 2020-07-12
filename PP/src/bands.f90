@@ -11,11 +11,13 @@ PROGRAM do_bands
   !-----------------------------------------------------------------------
   !
   ! See files INPUT_BANDS.* in Doc/ directory for usage
-  ! 
   !
+  !
+  USE kinds, ONLY : DP
   USE io_files,  ONLY : prefix, tmp_dir
-  USE mp_global, ONLY : mp_startup
+  USE mp_global, ONLY : nproc_pool, nproc_file, nproc_pool_file, mp_startup
   USE mp_pools,  ONLY : npool
+  ! USE control_flags, ONLY : twfcollect, gamma_only
   USE control_flags, ONLY : gamma_only
   USE environment,   ONLY : environment_start, environment_end
   USE wvfct,     ONLY : nbnd
@@ -24,19 +26,22 @@ PROGRAM do_bands
   USE lsda_mod,  ONLY : nspin
   USE io_global, ONLY : ionode, ionode_id, stdout
   USE mp,        ONLY : mp_bcast
-  USE mp_images, ONLY : intra_image_comm
-  !
+  USE mp_images, ONLY : intra_image_comm  
   IMPLICIT NONE
-  !
   CHARACTER(LEN=256), EXTERNAL :: trimcheck
-  !
   CHARACTER (len=256) :: filband, filp, outdir
   LOGICAL :: lsigma(4), lsym, lp, no_overlap, plot_2d
   INTEGER :: spin_component, firstk, lastk
   INTEGER :: ios
-  !
-  NAMELIST / bands / outdir, prefix, filband, filp, spin_component, lsigma,&
-                       lsym, lp, filp, firstk, lastk, no_overlap, plot_2d
+  integer :: nvb, ncb
+  logical :: isbare, verbo
+  logical :: output_ppsi
+  logical :: restart_with_ppsi, ppsi_v
+  real(DP) :: qshift1, qshift2, qshift3
+  real(DP) :: qshift(3), qshift_(3)
+  NAMELIST / bands / outdir, prefix, filband, filp, spin_component, lsigma, &
+       lsym, lp, filp, firstk, lastk, no_overlap, plot_2d, &
+       ncb, nvb, isbare, verbo, output_ppsi, restart_with_ppsi, qshift1, qshift2, qshift3, ppsi_v
   !
   ! initialise environment
   !
@@ -60,9 +65,18 @@ PROGRAM do_bands
   firstk=0
   lastk=10000000
   spin_component = 1
-  !
+  nvb = 1
+  ncb = 1
+  isbare = .true.
+  verbo = .false.
+  output_ppsi = .false.
+  restart_with_ppsi = .false.
+  ! k_c - k_v
+  qshift1 = 0.0D0
+  qshift2 = 0.0D0
+  qshift3 = 0.0D0
+  ppsi_v = .true.
   ios = 0
-  !
   IF ( ionode )  THEN
      !
      CALL input_from_file ( )
@@ -71,10 +85,116 @@ PROGRAM do_bands
      !
      lsigma(4)=.false.
      tmp_dir = trimcheck (outdir)
-     !
+
+     write(6,'(A)')
+     write(6,'(A,I5,5X,A,I5)') ">>> nvb = ", nvb, " ncb = ", ncb
+
+     IF (output_ppsi) then
+        ! ======
+        ! Format of tempvmt.[x,y,z].dat
+        ! xk(1:3,1:nrk) for WFN_fi
+        ! ppsi(1:nrk,1:nb)
+        ! ------
+        ! This is for absorption calculation with finite-Q
+        write(6,'(A)')
+
+        if (ppsi_v) then
+           write(6,'(A)') ">>> We will calculate \hat{p} | v k' > and output it into pv.h5, set restart_with_ppsi = .false."
+        else
+           write(6,'(A)') ">>> We will calculate \hat{p} | c k' > and output it into pc.h5, set restart_with_ppsi = .false."
+        endif
+
+        write(6,'(A)')
+
+        ! if (nspin .eq. 1) then
+        !    write(6,*) "nspin = 1"
+        ! elseif (nspin .eq. 4) then
+        !    write(6,*) "nspin = 4"
+        ! else
+        !    write(6,*) "nspin = ", nspin
+        !    call exit(2345)
+        ! endif
+
+        restart_with_ppsi = .false.
+
+        if (nvb*ncb .ne. 0) then
+           write(*,'(A)') ">>> When you set output_ppsi, either nvb or ncb must be 0!"
+           write(6,'(A)')
+           ! call exit(2345)
+        endif
+
+        if (ppsi_v) then
+           if (ncb .gt. 0) then
+              write(6,'(A)') ">>> Found ncb > 0, we will set ncb = 0 when calculationg p | v k_v >"
+              write(6,'(A)')
+
+              ncb = 0
+           endif
+        else
+           if (nvb .gt. 0) then
+              write(6,'(A)') ">>> Found nvb > 0, we will set nvb = 0 when calculationg p | c k_c >"
+              write(6,'(A)')
+
+              nvb = 0
+           endif
+        endif
+
+        write(6,'(A,I5,5X,A,I5)') ">>> Now nvb = ", nvb, " ncb = ", ncb
+        write(6,'(A)')
+
+        ! <- output_ppsi = F ->
+     ELSE
+
+        if (.not. restart_with_ppsi) then
+           write(6,'(A)') ">>> You set output_ppsi = F and restart_with_ppsi = F, which leads to the default setting of ik=ik_ket and ppsi_v = T"
+           write(6,'(A)')
+
+           ppsi_v = .TRUE.
+        endif
+
+        if (ppsi_v) then
+           write(6,'(A)') ">>> We will calculate < c k_c | \hat{p} | v k_v > and output it into vmt.cpv.[x,y,z].dat"
+           write(6,'(A)')
+
+        else
+           write(6,'(A)') ">>> We will calculate < v k_v | \hat{p} | c k_c > and output it into vmt.vpc.[x,y,z].dat"
+           write(6,'(A)')
+
+        endif
+
+        ! <- restart_with_ppsi = T ->
+        if (restart_with_ppsi) then
+           ! This is for absorption calculation with finite-Q
+           if (ppsi_v) then
+              write(6,'(A)') ">>> We will read pv.h5"
+              write(6,'(A)')
+
+           else ! <- ppsi_c = T ->
+              write(6,'(A)') ">>> We will read pc.h5"
+              write(6,'(A)')
+
+           endif
+        else ! <- restart_with_ppsi = F ->
+           ! This is for absorption calculation with zero-Q
+           !         or kernel calculation with zero-Q and long-range exchange interaction
+           write(6,'(A)') ">>> We will start from scratch!"
+           write(6,'(A)')
+
+           ! ======
+           ! Here qshift must all be zero
+           if ( (abs(qshift1)>1.0E-8) .or. (abs(qshift2)>1.0E-8) .or. (abs(qshift3)>1.0E-8)) then
+              write(*,'(A)') ">>> When you set output_ppsi = F and restart_ppsi = F, qshift should be 0!"
+              write(6,'(A)')
+
+              call exit(1345)
+           endif
+        endif
+     endif
+
+     write(*,'(A,3F12.6)') ">>> qshift = ", qshift1, qshift2, qshift3
+     write(6,'(A)')
   ENDIF
-  !
-  !
+
   CALL mp_bcast( ios, ionode_id, intra_image_comm )
   IF (ios /= 0) CALL errore ('bands', 'reading bands namelist', abs(ios) )
   !
@@ -93,47 +213,70 @@ PROGRAM do_bands
   CALL mp_bcast( no_overlap, ionode_id, intra_image_comm )
   CALL mp_bcast( plot_2d, ionode_id, intra_image_comm )
 
+  CALL mp_bcast( nvb, ionode_id, intra_image_comm )
+  CALL mp_bcast( ncb, ionode_id, intra_image_comm )
+  CALL mp_bcast( isbare, ionode_id, intra_image_comm )
+  CALL mp_bcast( verbo, ionode_id, intra_image_comm )
+  CALL mp_bcast( output_ppsi, ionode_id, intra_image_comm )
+  CALL mp_bcast( restart_with_ppsi, ionode_id, intra_image_comm )
+  CALL mp_bcast( qshift1, ionode_id, intra_image_comm )
+  CALL mp_bcast( qshift2, ionode_id, intra_image_comm )
+  CALL mp_bcast( qshift3, ionode_id, intra_image_comm )
+  CALL mp_bcast( ppsi_v, ionode_id, intra_image_comm )
+
+  qshift(1) = qshift1
+  qshift(2) = qshift2
+  qshift(3) = qshift3
+
+  if (restart_with_ppsi) then
+     ! ppsi_v
+     if (ppsi_v) then
+        qshift_(:) = qshift(:)
+        ! ppsi_c
+     else
+        qshift_(:) = - qshift(:)
+     endif
+  endif
+
   IF (plot_2d) THEN
      lsym=.false.
      lp=.false.
      no_overlap=.true.
   ENDIF
   IF (lsym) no_overlap=.true.
-
-  IF ( npool > 1 .and..not.(lsym.or.no_overlap)) CALL errore('bands', &
-                                             'pools not implemented',npool)
-  IF ( spin_component < 1 .OR. spin_component > 2 ) &
-     CALL errore('bands','incorrect spin_component',1)
-  !
-  !   Now allocate space for pwscf variables, read and check them.
-  !
+  IF ( npool > 1 .and..not.(lsym.or.no_overlap)) CALL errore('bands', 'pools not implemented',npool)
+  IF ( spin_component < 1 .OR. spin_component > 2 ) CALL errore('bands','incorrect spin_component',1)
   CALL read_file()
-  !
+
+  if (ionode) then
+     write(6,'(A,I5)') ">>> nspin = ", nspin
+  endif
+
+  ! hinit0() contains gk_sort()
+  !CALL hinit0()
   IF (gamma_only) CALL errore('bands','gamma_only case not implemented',1)
-  IF (two_fermi_energies.or.i_cons /= 0) &
-     CALL errore('bands',&
-     'The bands code with constrained magnetization has not been tested',1)
-  IF ( ANY(lsigma) .AND. .NOT.noncolin ) &
-     CALL errore ('punch_band', 'lsigma requires noncollinear run', 1 )
-  IF ( spin_component/=1 .and. nspin/=2 ) &
-     CALL errore('punch_bands','incorrect spin_component',1)
-  !
+  IF (nproc_pool /= nproc_pool_file) THEN
+     CALL errore('bands', 'pw.x run with a different number of procs/pools. Use wf_collect=.true.',1)
+  ENDIF
+  IF (two_fermi_energies.or.i_cons /= 0) CALL errore('bands', 'The bands code with constrained magnetization has not been tested',1)
+  IF ( ANY(lsigma) .AND. .NOT.noncolin ) CALL errore ('punch_band', 'lsigma requires noncollinear run', 1 )
+  IF ( spin_component/=1 .and. nspin/=2 ) CALL errore('punch_bands','incorrect spin_component',1)
+  IF (nspin .eq. 2) then
+     CALL errore('bands','Current bands.x (output p momentum matrix elements) does not support nspin=2!',1)
+  ENDIF
   CALL openfil_pp()
-  !
   IF (plot_2d) THEN
      CALL punch_band_2d(filband,spin_component)
   ELSE
-     CALL punch_band(filband,spin_component,lsigma,no_overlap)
-     IF (lsym) CALL sym_band(filband,spin_component,firstk,lastk)
-     IF (lp) CALL write_p_avg(filp,spin_component,firstk,lastk)
+     !CALL punch_band(filband,spin_component,lsigma,no_overlap)
+     !IF (lsym) CALL sym_band(filband,spin_component,firstk,lastk)
+     IF (lp) CALL write_p_avg(filp, spin_component, firstk, lastk, nvb, ncb, isbare, verbo, output_ppsi, restart_with_ppsi, qshift_, ppsi_v)
   END IF
-  !
   CALL environment_end ( 'BANDS' )
-  !
   CALL stop_pp
   STOP
 END PROGRAM do_bands
-!
+
 !-----------------------------------------------------------------------
 SUBROUTINE punch_band (filband, spin_component, lsigma, no_overlap)
   !-----------------------------------------------------------------------
@@ -160,13 +303,14 @@ SUBROUTINE punch_band (filband, spin_component, lsigma, no_overlap)
   USE mp,                   ONLY : mp_bcast
   USE mp_images,            ONLY : intra_image_comm
   USE becmod,               ONLY : calbec, bec_type, allocate_bec_type, &
-                                   deallocate_bec_type, becp
+       deallocate_bec_type, becp
 
   IMPLICIT NONE
   CHARACTER (len=*) :: filband
   INTEGER, INTENT(IN) :: spin_component
   LOGICAL, INTENT(IN) :: lsigma(4), no_overlap
 
+  ! TYPE(bec_type):: becp
   ! becp   : <psi|beta> at current  k-point
   INTEGER :: ibnd, jbnd, i, ik, ig, ig1, ig2, ipol, npw, ngmax, jmax
   INTEGER :: nks1tot, nks2tot, nks1, nks2
@@ -179,7 +323,7 @@ SUBROUTINE punch_band (filband, spin_component, lsigma, no_overlap)
   REAL(DP), ALLOCATABLE:: sigma_avg(:,:,:) ! expectation value of sigma
   REAL(DP), ALLOCATABLE:: et_(:,:) ! reordered eigenvalues in eV
 
-  
+
   IF (filband == ' ') RETURN
 
   iunpun = 19
@@ -195,8 +339,8 @@ SUBROUTINE punch_band (filband, spin_component, lsigma, no_overlap)
            iunpun_sigma(ipol)=iunpun+ipol
            WRITE(nomefile,'(".",i1)') ipol
            OPEN (unit = iunpun_sigma(ipol),  &
-                 file = trim(filband)//trim(nomefile), &
-                 status = 'unknown', form='formatted', iostat = ios(ipol))
+                file = trim(filband)//trim(nomefile), &
+                status = 'unknown', form='formatted', iostat = ios(ipol))
            REWIND (iunpun_sigma(ipol))
         ENDIF
      ENDDO
@@ -205,10 +349,10 @@ SUBROUTINE punch_band (filband, spin_component, lsigma, no_overlap)
   !
   CALL mp_bcast( ios, ionode_id, intra_image_comm )
   IF ( ios(0) /= 0 ) &
-     CALL errore ('punch_band', 'Opening filband file', abs(ios(0)) )
+       CALL errore ('punch_band', 'Opening filband file', abs(ios(0)) )
   DO ipol=1,4
      IF ( ios(ipol) /= 0 ) &
-        CALL errore ('punch_band', 'Opening filband.N file ', ipol)
+          CALL errore ('punch_band', 'Opening filband.N file ', ipol)
   ENDDO
   !
   CALL find_nks1nks2(1,nkstot,nks1tot,nks1,nks2tot,nks2,spin_component)
@@ -244,7 +388,7 @@ SUBROUTINE punch_band (filband, spin_component, lsigma, no_overlap)
      ! calculate average magnetization for noncolinear case
      !
      IF (noncolin) &
-           CALL compute_sigma_avg(sigma_avg(1,1,ik),becp%nc,ik,lsigma)
+          CALL compute_sigma_avg(sigma_avg(1,1,ik),becp%nc,ik,lsigma)
      !
      IF ( ik > nks1 .AND. .NOT. no_overlap ) THEN
         !
@@ -258,7 +402,7 @@ SUBROUTINE punch_band (filband, spin_component, lsigma, no_overlap)
         END DO
         igg(:) = 0
         DO ig2 = 1, npw
-           ig1 = work( igk_k(ig2,ik)) 
+           ig1 = work( igk_k(ig2,ik))
            IF (ig1 > 0) igg(ig2) = ig1
         END DO
         !
@@ -294,18 +438,18 @@ SUBROUTINE punch_band (filband, spin_component, lsigma, no_overlap)
            IF ( psmax > 0.75 ) THEN
               ! simple case: large overlap with one specific band
               closest_band(ibnd,ik) = MAXLOC( psr, 1 )
-              ! record that this band at ik has been linked to a band at ik-1 
+              ! record that this band at ik has been linked to a band at ik-1
               done( closest_band(ibnd,ik) ) = 1
               ! ndone = ndone + 1
               !
-        !   ELSE IF ( psmax < 0.05 ) THEN
-        !      ! simple case: negligible overlap with all bands
-        !      closest_band(ibnd,ik) = 0
-        !      nlost = nlost + 1
+              !   ELSE IF ( psmax < 0.05 ) THEN
+              !      ! simple case: negligible overlap with all bands
+              !      closest_band(ibnd,ik) = 0
+              !      nlost = nlost + 1
               !
            END IF
         END DO
-        !  
+        !
         ! assign remaining bands so as to maximise overlap
         !
         DO ibnd=1,nbnd
@@ -362,16 +506,16 @@ SUBROUTINE punch_band (filband, spin_component, lsigma, no_overlap)
      END DO
      !
      CALL punch_plottable_bands ( filband, nks1tot, nks2tot, nkstot, nbnd, &
-                                  xk, et_ )
+          xk, et_ )
      !
      DO ik=nks1tot,nks2tot
         IF (ik == nks1) THEN
            WRITE (iunpun, '(" &plot nbnd=",i4,", nks=",i6," /")') &
-             nbnd, nks2tot-nks1tot+1
+                nbnd, nks2tot-nks1tot+1
            DO ipol=1,4
               IF (lsigma(ipol)) WRITE(iunpun_sigma(ipol), &
-                            '(" &plot nbnd=",i4,", nks=",i6," /")') &
-                             nbnd, nks2tot-nks1tot+1
+                   '(" &plot nbnd=",i4,", nks=",i6," /")') &
+                   nbnd, nks2tot-nks1tot+1
            ENDDO
         ENDIF
         WRITE (iunpun, '(10x,3f10.6)') xk(1,ik),xk(2,ik),xk(3,ik)
@@ -379,9 +523,9 @@ SUBROUTINE punch_band (filband, spin_component, lsigma, no_overlap)
         DO ipol=1,4
            IF (lsigma(ipol)) THEN
               WRITE (iunpun_sigma(ipol), '(10x,3f10.6)')            &
-                                          xk(1,ik),xk(2,ik),xk(3,ik)
+                   xk(1,ik),xk(2,ik),xk(3,ik)
               WRITE (iunpun_sigma(ipol), '(10f9.3)')                &
-                            (sigma_avg(ipol, ibnd, ik), ibnd = 1, nbnd)
+                   (sigma_avg(ipol, ibnd, ik), ibnd = 1, nbnd)
            ENDIF
         ENDDO
      ENDDO
@@ -406,92 +550,92 @@ SUBROUTINE punch_band (filband, spin_component, lsigma, no_overlap)
 END SUBROUTINE punch_band
 
 SUBROUTINE punch_band_2d(filband,spin_component)
-!
-!  This routine opens a file for each band and writes on output 
-!  kx, ky, energy, 
-!  kx, ky, energy
-!  .., .., ..
-!  where kx and ky are proportional to the length
-!  of the vectors k_1 and k_2 specified in the input of the 2d plot.
-!
-!  The k points are supposed to be in the form
-!  xk(i,j) = xk_0 + dkx *(i-1) + dky * (j-1)      1<i<n1, 1<j<n2
-!
-!  kx(i,j) = (i-1) |dkx|
-!  ky(i,j) = (j-1) |dky|
-!
-   USE kinds, ONLY : DP
-   USE constants, ONLY : eps8, rytoev
-   USE lsda_mod,  ONLY : nspin
-   USE klist, ONLY : xk, nkstot, nks
-   USE wvfct, ONLY : et, nbnd
-   USE io_files, ONLY : iuntmp
-   USE io_global, ONLY : ionode, ionode_id
-   USE mp, ONLY : mp_bcast
-   USE mp_images, ONLY : intra_image_comm
+  !
+  !  This routine opens a file for each band and writes on output
+  !  kx, ky, energy,
+  !  kx, ky, energy
+  !  .., .., ..
+  !  where kx and ky are proportional to the length
+  !  of the vectors k_1 and k_2 specified in the input of the 2d plot.
+  !
+  !  The k points are supposed to be in the form
+  !  xk(i,j) = xk_0 + dkx *(i-1) + dky * (j-1)      1<i<n1, 1<j<n2
+  !
+  !  kx(i,j) = (i-1) |dkx|
+  !  ky(i,j) = (j-1) |dky|
+  !
+  USE kinds, ONLY : DP
+  USE constants, ONLY : eps8, rytoev
+  USE lsda_mod,  ONLY : nspin
+  USE klist, ONLY : xk, nkstot, nks
+  USE wvfct, ONLY : et, nbnd
+  USE io_files, ONLY : iuntmp
+  USE io_global, ONLY : ionode, ionode_id
+  USE mp, ONLY : mp_bcast
+  USE mp_images, ONLY : intra_image_comm
 
-   IMPLICIT NONE
-   CHARACTER(LEN=256),INTENT(IN) :: filband
-   INTEGER, INTENT(IN) :: spin_component
-   REAL(DP) :: xk0(3), xk1(3), xk2(3), dkx(3), dky(3), xkdum(3), mdkx, mdky
-   INTEGER :: n1, n2
-   INTEGER :: ik, i, i1, i2, ibnd, ijk, start_k, last_k, nks_eff, j, ios
-   CHARACTER(LEN=256) :: filename
-   CHARACTER(LEN=6), EXTERNAL :: int_to_char
-   REAL(DP), ALLOCATABLE :: xk_collect(:,:), et_collect(:,:)
-   
-   ALLOCATE(xk_collect(3,nkstot))
-   ALLOCATE(et_collect(nbnd,nkstot))
-   CALL poolcollect(    3, nks, xk, nkstot, xk_collect)
-   CALL poolcollect( nbnd, nks, et, nkstot, et_collect)
+  IMPLICIT NONE
+  CHARACTER(LEN=256),INTENT(IN) :: filband
+  INTEGER, INTENT(IN) :: spin_component
+  REAL(DP) :: xk0(3), xk1(3), xk2(3), dkx(3), dky(3), xkdum(3), mdkx, mdky
+  INTEGER :: n1, n2
+  INTEGER :: ik, i, i1, i2, ibnd, ijk, start_k, last_k, nks_eff, j, ios
+  CHARACTER(LEN=256) :: filename
+  CHARACTER(LEN=6), EXTERNAL :: int_to_char
+  REAL(DP), ALLOCATABLE :: xk_collect(:,:), et_collect(:,:)
 
-   start_k=1
-   last_k=nkstot
-   nks_eff=nkstot
-   IF (nspin==2) THEN
-      nks_eff=nkstot/2
-      IF (spin_component==1) THEN
-         start_k=1
-         last_k=nks_eff
-      ELSE
-         start_k=nks_eff+1
-         last_k=nkstot
-      ENDIF
-   ENDIF
-!
-!  Determine xk0
-!
-   xk0(:)=xk_collect(:,start_k)
-!
-! Determine dkx
-!
-   dky(:)=xk_collect(:,start_k+1)-xk0(:)
-!
-! Determine n2 and dky
-!
+  ALLOCATE(xk_collect(3,nkstot))
+  ALLOCATE(et_collect(nbnd,nkstot))
+  CALL poolcollect(    3, nks, xk, nkstot, xk_collect)
+  CALL poolcollect( nbnd, nks, et, nkstot, et_collect)
 
-loop_k:  DO j=start_k+2, nkstot
+  start_k=1
+  last_k=nkstot
+  nks_eff=nkstot
+  IF (nspin==2) THEN
+     nks_eff=nkstot/2
+     IF (spin_component==1) THEN
+        start_k=1
+        last_k=nks_eff
+     ELSE
+        start_k=nks_eff+1
+        last_k=nkstot
+     ENDIF
+  ENDIF
+  !
+  !  Determine xk0
+  !
+  xk0(:)=xk_collect(:,start_k)
+  !
+  ! Determine dkx
+  !
+  dky(:)=xk_collect(:,start_k+1)-xk0(:)
+  !
+  ! Determine n2 and dky
+  !
+
+  loop_k:  DO j=start_k+2, nkstot
      xkdum(:)=xk0(:)+(j-1)*dky(:)
      IF (ABS(xk_collect(1,j)-xkdum(1))>eps8.OR.   &
-         ABS(xk_collect(2,j)-xkdum(2))>eps8.OR.   &
-         ABS(xk_collect(3,j)-xkdum(3))>eps8) THEN    
-         n2=j-1
-         dkx(:)=xk_collect(:,j)-xk0(:)
-         EXIT loop_k
+          ABS(xk_collect(2,j)-xkdum(2))>eps8.OR.   &
+          ABS(xk_collect(3,j)-xkdum(3))>eps8) THEN
+        n2=j-1
+        dkx(:)=xk_collect(:,j)-xk0(:)
+        EXIT loop_k
      ENDIF
   ENDDO  loop_k
   n1=nks_eff/n2
   IF (n1*n2 /= nks_eff) CALL errore('punch_band_2d',&
-                                    'Problems with k points',1)
+       'Problems with k points',1)
   mdkx = sqrt( dkx(1)**2 + dkx(2)**2 + dkx(3)**2 )
   mdky = sqrt( dky(1)**2 + dky(2)**2 + dky(3)**2 )
-!   
-!  write the output, a band per file
-!
+  !
+  !  write the output, a band per file
+  !
   DO ibnd=1,nbnd
      filename=TRIM(filband) // '.' // TRIM(int_to_char(ibnd))
      IF (ionode) &
-     open(unit=iuntmp,file=filename,status='unknown', err=100, iostat=ios)
+          open(unit=iuntmp,file=filename,status='unknown', err=100, iostat=ios)
      CALL mp_bcast(ios,ionode_id, intra_image_comm)
 100  CALL errore('punch_band_2d','Problem opening outputfile',ios)
      ijk=0
@@ -499,9 +643,9 @@ loop_k:  DO j=start_k+2, nkstot
         DO i2=1,n2
            ijk=ijk+1
            IF (ionode) &
-           WRITE(iuntmp,'(3f16.6)') mdkx*(i1-1), mdky*(i2-1), &
-                                    et_collect(ibnd,ijk)*rytoev
-        ENDDO 
+                WRITE(iuntmp,'(3f16.6)') mdkx*(i1-1), mdky*(i2-1), &
+                et_collect(ibnd,ijk)*rytoev
+        ENDDO
      ENDDO
      IF (ionode) CLOSE(unit=iuntmp,status='KEEP')
   ENDDO
@@ -510,18 +654,18 @@ loop_k:  DO j=start_k+2, nkstot
   DEALLOCATE(et_collect)
 
   RETURN
-  END
+END SUBROUTINE punch_band_2d
 !
 !----------------------------------------------------------------------------
 SUBROUTINE punch_plottable_bands ( filband, nks1tot, nks2tot, nkstot, nbnd, &
-                                   xk, et )
+     xk, et )
   !---------------------------------------------------------------------------
   !
   USE kinds, ONLY : dp
   IMPLICIT NONE
   CHARACTER(LEN=*), INTENT(IN) :: filband
   INTEGER, INTENT(IN) :: nks1tot, nks2tot, nkstot, nbnd
-  REAL(dp), INTENT(IN) :: xk(3,nkstot), et(nbnd,nkstot)
+  REAL(dp), INTENT(IN) :: xk(3,nkstot), et(nbnd,nks1tot)
   !
   INTEGER, PARAMETER :: max_lines = 100, stdout=6, iunpun0=18
   INTEGER:: ios, i, n, nlines, npoints(max_lines), point(max_lines)
@@ -573,13 +717,13 @@ SUBROUTINE punch_plottable_bands ( filband, nks1tot, nks2tot, nkstot, nbnd, &
   kx(nks1tot) = 0.0_dp
   DO n=nks1tot+1,nks2tot
      dxmod=sqrt ( (xk(1,n)-xk(1,n-1))**2 + &
-                  (xk(2,n)-xk(2,n-1))**2 + &
-                  (xk(3,n)-xk(3,n-1))**2 )
+          (xk(2,n)-xk(2,n-1))**2 + &
+          (xk(3,n)-xk(3,n-1))**2 )
      IF (dxmod > 5*dxmod_save) THEN
         !
         !   A big jump in dxmod is a sign that the point xk(:,n) and xk(:,n-1)
         !   are quite distant and belong to two different lines. We put them on
-        !   the same point in the graph 
+        !   the same point in the graph
         !
         kx(n)=kx(n-1)
      ELSEIF (dxmod > 1.d-4) THEN
@@ -637,7 +781,7 @@ SUBROUTINE punch_plottable_bands ( filband, nks1tot, nks2tot, nkstot, nbnd, &
         ENDIF
         !
         WRITE( stdout,'(5x,"high-symmetry point: ",3f7.4,&
-                         &"   x coordinate",f9.4)') (xk(i,n),i=1,3), kx(n)
+             &"   x coordinate",f9.4)') (xk(i,n),i=1,3), kx(n)
      ELSE
         !
         !   This k is not an high symmetry line so we just increase the number
@@ -659,4 +803,3 @@ SUBROUTINE punch_plottable_bands ( filband, nks1tot, nks2tot, nkstot, nbnd, &
   RETURN
   !
 END SUBROUTINE punch_plottable_bands
-

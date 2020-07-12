@@ -16,6 +16,7 @@ atomic_wfc_nc_proj.o \
 chdens_module.o \
 chdens_bspline.o \
 compute_ppsi.o \
+compute_ppsi_vc.o \
 compute_sigma_avg.o \
 cube.o \
 dosg.o \

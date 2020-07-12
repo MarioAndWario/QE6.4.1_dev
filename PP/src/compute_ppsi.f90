@@ -33,6 +33,10 @@ SUBROUTINE compute_ppsi (ppsi, ppsi_us, ik, ipol, nbnd_occ, current_spin)
   USE uspp_param,           ONLY : nh, nhm
   IMPLICIT NONE
   !
+  ! ======
+  ! [important]
+  ! Find out the arrangement of g and igk_k
+  ! ------
   INTEGER, INTENT(in) :: ipol, ik, nbnd_occ, current_spin
   !
   COMPLEX(DP) :: ppsi(npwx,npol,nbnd_occ), ppsi_us(npwx,npol,nbnd_occ)
@@ -67,8 +71,12 @@ SUBROUTINE compute_ppsi (ppsi, ppsi_us, ik, ipol, nbnd_occ, current_spin)
      dvkb (:,:) = (0.d0, 0.d0)
      dvkb1(:,:) = (0.d0, 0.d0)
   ENDIF
+  ! =======
+  ! Within one pool, given ik, then each cpu has a share of Gvectors npw = ngk(ik)
   npw = ngk(ik)
   DO ig = 1, npw
+     ! ======
+     ! evc(ig,ib) corresponding to g(:,igk_k(ig,ik))
      gk (1, ig) = (xk (1, ik) + g (1, igk_k(ig,ik) ) ) * tpiba
      gk (2, ig) = (xk (2, ik) + g (2, igk_k(ig,ik) ) ) * tpiba
      gk (3, ig) = (xk (3, ik) + g (3, igk_k(ig,ik) ) ) * tpiba
@@ -79,6 +87,9 @@ SUBROUTINE compute_ppsi (ppsi, ppsi_us, ik, ipol, nbnd_occ, current_spin)
   DO ip=1,npol
      DO ibnd = 1, nbnd_occ
         DO ig = 1, npw
+           ! ======
+           ! evc(1:npw,ib) for spin up
+           ! evc(npwx+1:npwx+npw) for spin down
            ppsi(ig,ip,ibnd)=gk(ipol,ig)*evc(ig+npwx*(ip-1),ibnd)
         ENDDO
      ENDDO
