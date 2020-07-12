@@ -196,6 +196,9 @@ SUBROUTINE init_wfc ( ik )
   COMPLEX(DP), ALLOCATABLE :: wfcatom(:,:,:) ! atomic wfcs for initialization
   !
   !
+  !! added by Zhenglu according to Felipe
+  rr = randy(mpime)
+  
   IF ( starting_wfc(1:6) == 'atomic' ) THEN
      !
      n_starting_wfc = MAX( natomwfc, nbnd )
