@@ -2,9 +2,9 @@
 # WANNIER90 	
 #=======================================
 
-TOPDIR = /home1/03355/tg826544/software/QE/QE6.4.1/QE6.4.1_dev
+TOPDIR = /global/homes/m/mwu/softwares/QE/QE6.4.1/QE6.4.1_dev_elpa
 
-F90=mpif90
+F90=ifort
 FCOPTS=$(FFLAGS) -nomodule 
 LDOPTS= 
 

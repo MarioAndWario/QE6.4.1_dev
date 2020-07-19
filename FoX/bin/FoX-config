@@ -1,6 +1,6 @@
 #!/bin/sh
 
-comp_prefix=/home1/03355/tg826544/software/QE/QE6.4.1/QE6.4.1_dev//FoX
+comp_prefix=/global/u2/m/mwu/softwares/QE/QE6.4.1/QE6.4.1_dev_elpa//FoX
 moddir=`echo $comp_prefix/finclude`
 libdir=`echo $comp_prefix/lib`
 version=4.1.2

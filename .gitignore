@@ -1,0 +1,7 @@
+make.inc
+*.[aox]
+*.p.f
+*~
+*.mod
+*__genmod.f90
+Epsilon/test/
