@@ -1,5 +1,16 @@
 # make.inc.  Generated from make.inc.in by configure.
-
+#  1) modules/3.2.11.4                                 13) dvs/2.12_2.2.156-7.0.1.1_8.9__g5aab709e
+#  2) altd/2.0                                         14) alps/6.6.58-7.0.1.1_6.4__g437d88db.ari
+#  3) craype-network-aries                             15) rca/2.2.20-7.0.1.1_4.46__g8e3fb5b.ari
+#  4) craype/2.6.2                                     16) atp/2.1.3
+#  5) cray-libsci/19.06.1                              17) PrgEnv-intel/6.0.5
+#  6) udreg/2.3.2-7.0.1.1_3.31__g8175d3d.ari           18) craype-haswell
+#  7) ugni/6.0.14.0-7.0.1.1_7.33__ge78e5b0.ari         19) cray-mpich/7.7.10
+#  8) pmi/5.0.14                                       20) craype-hugepages2M
+#  9) dmapp/7.1.1-7.0.1.1_4.48__g38cf134.ari           21) intel/19.0.3.199
+# 10) gni-headers/5.0.12.0-7.0.1.1_6.28__g3b1768f.ari  22) cray-hdf5-parallel/1.10.5.2
+# 11) xpmem/2.2.20-7.0.1.1_4.10__g0475745.ari          23) cray-fftw/3.3.8.4
+# 12) job/2.2.4-7.0.1.1_3.36__g36b56f4.ari             24) python/3.7-anaconda-2019.10
 # compilation rules
 
 .SUFFIXES :
