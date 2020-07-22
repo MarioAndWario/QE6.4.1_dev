@@ -112,7 +112,7 @@ CPPFLAGS       = -P -traditional -Uvector $(DFLAGS) $(IFLAGS)
 # C flags must include DFLAGS and IFLAGS
 # F90 flags must include MODFLAGS, IFLAGS, and FDFLAGS with appropriate syntax
 
-CFLAGS         = -O3 -xCORE-AVX2 -qopt-zmm-usage=high -fp-model f\ast=2 -complex-limited-range -fno-alias -ansi-alias $(DFLAGS) $(IFLAGS)
+CFLAGS         = -O3 -xCORE-AVX2 -qopt-zmm-usage=high -fp-model fast=2 -complex-limited-range -fno-alias -ansi-alias $(DFLAGS) $(IFLAGS)
 F90FLAGS       = $(FFLAGS) -nomodule -qopenmp -fpp $(FDFLAGS) $(CUDA_F90FLAGS) $(IFLAGS) $(MODFLAGS)
 FFLAGS         = -O2 -xCORE-AVX2 -align array64byte -threads -heap-arrays 4096 -qopt-zmm-usage=high -fp-model fast=2 -complex-limited-range -assume byterecl -qopenmp
 
