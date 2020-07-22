@@ -649,6 +649,7 @@ CONTAINS
     character(LEN=20) :: ik_global_string
     character(LEN=20) :: ib_string, is_string
     complex (DP) :: norm
+    real(DP) :: norm_tol=1.0D-8
 
     ! In noncollinear case, nspin = 4, npol = 2
     ! [ IMPORTANT ] nspin = 2 ==> proc_wf = .TRUE.
@@ -1654,12 +1655,12 @@ CONTAINS
                 ENDDO
 
                 ! write(*,'(1X,A,I5,A,I5,A,2ES20.12)') "ik #", ik, " ib #", ib, " NORM = ", norm
-                IF ( ABS(DBLE(norm)-1.0D0) > 1.0D-10 ) THEN
+                IF ( ABS(DBLE(norm)-1.0D0) > norm_tol ) THEN
                    write(*,'(1X,A,I5,A,I5,A,ES20.12)') "ik #", ik, " ib #", ib, " RE[NORM] = ", DBLE(norm)
                    call exit(4321)
                 ENDIF
 
-                IF ( ABS(DIMAG(norm)) > 1.0D-10 ) THEN
+                IF ( ABS(DIMAG(norm)) > norm_tol ) THEN
                    write(*,'(1X,A,I5,A,I5,A,ES20.12)') "ik #", ik, " ib #", ib, " Im[NORM] = ", DIMAG(norm)
                    call exit(1234)
                 ENDIF
