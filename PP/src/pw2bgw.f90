@@ -2126,10 +2126,10 @@ CONTAINS
        ! ft_minus(1:3,itran) = -ft(1:3,itran)
        do id = 1, 3
           !> If an entry of ft is 0.5, ft_minus = ft = 0.5          
-          if (ABS(ft(id, i) - 0.5D0) < 1.0D-12) then
-             ft_minus(id, i) = 0.5D0
+          if (ABS(ft(id, itran) - 0.5D0) < 1.0D-12) then
+             ft_minus(id, itran) = 0.5D0
           else
-             ft_minus(id, i) = - ft(id, i)
+             ft_minus(id, itran) = - ft(id, itran)
           endif
        enddo       
        s_transpose(1:3,1:3,itran) = transpose(s(1:3,1:3,itran))
