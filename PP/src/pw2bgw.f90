@@ -810,9 +810,17 @@ CONTAINS
          CALL errore ( 'write_wfng', 'cell_symmetry', ierr )
 
     ntran = nsym
-    DO i=1, ntran
-       ft_minus(1:3,i) = -ft(1:3,i)
-       s_transpose(1:3,1:3,i) = transpose(s(1:3,1:3,i))
+    DO i = 1, ntran       
+       ! ft_minus(1:3, i) = -ft(1:3, i)
+       do id = 1, 3
+          !> If an entry of ft is 0.5, ft_minus = ft = 0.5          
+          if (ABS(ft(id, i) - 0.5D0) < 1.0D-12) then
+             ft_minus(id, i) = 0.5D0
+          else
+             ft_minus(id, i) = - ft(id, i)
+          endif
+       enddo
+       s_transpose(1:3, 1:3, i) = transpose(s(1:3, 1:3, i))
     ENDDO
 
     ! DO i = 1, ntran
@@ -2115,7 +2123,15 @@ CONTAINS
     ! CALL check_inversion ( real_or_complex, nsym, s, nspin, .true., .true., translation )
 
     do itran = 1, ntran
-       ft_minus(1:3,itran) = -ft(1:3,itran)
+       ! ft_minus(1:3,itran) = -ft(1:3,itran)
+       do id = 1, 3
+          !> If an entry of ft is 0.5, ft_minus = ft = 0.5          
+          if (ABS(ft(id, i) - 0.5D0) < 1.0D-12) then
+             ft_minus(id, i) = 0.5D0
+          else
+             ft_minus(id, i) = - ft(id, i)
+          endif
+       enddo       
        s_transpose(1:3,1:3,itran) = transpose(s(1:3,1:3,itran))
     enddo
 
