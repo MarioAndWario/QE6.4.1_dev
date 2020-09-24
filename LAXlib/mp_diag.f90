@@ -113,6 +113,10 @@ CONTAINS
     !
     ! set the number of processors in the diag group to the actual number used
     !
+    if (mpime .eq. 0) then
+       write(6,'(A,I6,A,I6)') "ndiag_in = ", ndiag_, " ndiag_out = ", nproc_ortho
+    endif
+    
     ndiag_ = nproc_ortho
     !  
     RETURN
