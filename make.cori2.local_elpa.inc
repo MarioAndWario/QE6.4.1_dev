@@ -1,18 +1,16 @@
 # make.inc.  Generated from make.inc.in by configure.
- #  1) modules/3.2.11.4                                 14) alps/6.6.58-7.0.1.1_6.10__g437d88db.ari
- #  2) altd/2.0                                         15) rca/2.2.20-7.0.1.1_4.53__g8e3fb5b.ari
- #  3) craype-network-aries                             16) atp/2.1.3
- #  4) craype/2.6.2                                     17) PrgEnv-intel/6.0.5
- #  5) cray-libsci/19.06.1                              18) craype-haswell
- #  6) udreg/2.3.2-7.0.1.1_3.38__g8175d3d.ari           19) cray-mpich/7.7.10
- #  7) ugni/6.0.14.0-7.0.1.1_7.40__ge78e5b0.ari         20) craype-hugepages2M
- #  8) pmi/5.0.14                                       21) intel/19.0.3.199
- #  9) dmapp/7.1.1-7.0.1.1_4.54__g38cf134.ari           22) cray-hdf5-parallel/1.10.5.2
- # 10) gni-headers/5.0.12.0-7.0.1.1_6.32__g3b1768f.ari  23) cray-fftw/3.3.8.4
- # 11) xpmem/2.2.20-7.0.1.1_4.14__g0475745.ari          24) python/3.7-anaconda-2019.10
- # 12) job/2.2.4-7.0.1.1_3.41__g36b56f4.ari             25) elpa/2017.05.001.rc1
- # 13) dvs/2.12_2.2.164-7.0.1.1_13.1__g354a5276
-
+#  1) modules/3.2.11.4                                 13) dvs/2.12_2.2.156-7.0.1.1_8.9__g5aab709e
+#  2) altd/2.0                                         14) alps/6.6.58-7.0.1.1_6.4__g437d88db.ari
+#  3) craype-network-aries                             15) rca/2.2.20-7.0.1.1_4.46__g8e3fb5b.ari
+#  4) craype/2.6.2                                     16) atp/2.1.3
+#  5) cray-libsci/19.06.1                              17) PrgEnv-intel/6.0.5
+#  6) udreg/2.3.2-7.0.1.1_3.31__g8175d3d.ari           18) craype-haswell
+#  7) ugni/6.0.14.0-7.0.1.1_7.33__ge78e5b0.ari         19) cray-mpich/7.7.10
+#  8) pmi/5.0.14                                       20) craype-hugepages2M
+#  9) dmapp/7.1.1-7.0.1.1_4.48__g38cf134.ari           21) intel/19.0.3.199
+# 10) gni-headers/5.0.12.0-7.0.1.1_6.28__g3b1768f.ari  22) cray-hdf5-parallel/1.10.5.2
+# 11) xpmem/2.2.20-7.0.1.1_4.10__g0475745.ari          23) cray-fftw/3.3.8.4
+# 12) job/2.2.4-7.0.1.1_3.36__g36b56f4.ari             24) python/3.7-anaconda-2019.10
 # compilation rules
 
 .SUFFIXES :
@@ -63,7 +61,7 @@ FDFLAGS        = $(DFLAGS) $(MANUAL_DFLAGS)
 #          the latter contains .e.g. files needed by FFT libraries
 # for libxc add -I/path/to/libxc/include/
 
-IFLAGS       = -I$(TOPDIR)/include -I$(TOPDIR)/FoX/finclude -I$(TOPDIR)/S3DE/iotk/include/ -I$(MKLROOT)/include/fftw -I$(MKLROOT)/include -I$(HDF5_DIR)/include -I$(ELPA_DIR)/include/elpa_openmp-2017.05.001.rc1/modules -I$(ELPA_DIR)/include/elpa_openmp-2017.05.001.rc1/elpa
+IFLAGS       = -I$(TOPDIR)/include -I$(TOPDIR)/FoX/finclude -I$(TOPDIR)/S3DE/iotk/include/ -I$(MKLROOT)/include/fftw -I$(MKLROOT)/include -I$(HDF5_DIR)/include -I$(ELPA_DIR)/include/elpa_openmp-2017.11.001/modules -I$(ELPA_DIR)/include/elpa_openmp-2017.11.001/elpa
 
 # MOD_FLAG = flag used by f90 compiler to locate modules
 
@@ -134,7 +132,7 @@ FFLAGS_NOMAIN   = -nofor_main
 
 LD             = ftn
 LDFLAGS        = -static -qopenmp
-LD_LIBS        = -L$(ELPA_DIR)/lib -lelpa_openmp
+LD_LIBS        = #-L$(ELPA_DIR)/lib -lelpa_openmp
 
 # External Libraries (if any) : blas, lapack, fft, MPI
 
@@ -154,7 +152,7 @@ BLAS_LIBS_SWITCH = external
 LAPACK_LIBS = -Wl,--start-group $(MKLROOT)/lib/intel64/libmkl_intel_lp64.a $(MKLROOT)/lib/intel64/libmkl_core.a $(MKLROOT)/lib/intel64/libmkl_intel_thread.a $(MKLROOT)/lib/intel64/libmkl_blacs_intelmpi_lp64.a -Wl,--end-group
 LAPACK_LIBS_SWITCH = external
 
-SCALAPACK_LIBS = $(MKLROOT)/lib/intel64/libmkl_scalapack_lp64.a
+SCALAPACK_LIBS = $(ELPA_DIR)/lib/libelpa_openmp.a $(MKLROOT)/lib/intel64/libmkl_scalapack_lp64.a
 
 # nothing needed here if the the internal copy of FFTW is compiled
 # (needs -D__FFTW in DFLAGS)
