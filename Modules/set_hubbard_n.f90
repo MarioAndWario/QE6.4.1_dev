@@ -57,7 +57,7 @@ FUNCTION set_hubbard_n( psd ) RESULT( hubbard_n )
         !
         hubbard_n =  2
         !
-     CASE( 'As', 'Ga' ) 
+     CASE( 'As', 'Ga', 'Ge' ) 
         !
         hubbard_n =  3
         !
