@@ -122,7 +122,7 @@ PROGRAM pw2bgw
   USE loc_scdm_k, ONLY : localize_orbitals_k
   USE loc_scdm,      ONLY : use_scdm, scdm_den, scdm_grd, n_scdm
   USE input_parameters, ONLY : scdmden, scdmgrd, nscdm, n_proj, localization_thr, scdm, ace, nqx1, nqx2, nqx3
-  USE fft_rho,  ONLY : rho_g2r  
+  USE fft_rho,  ONLY : rho_g2r
   USE fft_base,  ONLY : dfftp
 
   IMPLICIT NONE
@@ -499,11 +499,11 @@ PROGRAM pw2bgw
   !! twfcollect=.true. ! ==> delete prefix.wfc* files after usage
   CALL hinit0()
 
-  !> [important]
-  IF (dft_is_meta()) then                           !FZ:  for metaGGA change062320
-     CALL rho_g2r ( dfftp, rho%kin_g, rho%kin_r )   !FZ:  for metaGGA
-     CALL v_xc_meta( rho, rho_core, rhog_core, etxc, vtxc, v%of_r, v%kin_r )
-  ENDIF
+  ! !> [important]
+  ! IF (dft_is_meta()) then                           !FZ:  for metaGGA change062320
+  !    CALL rho_g2r ( dfftp, rho%kin_g, rho%kin_r )   !FZ:  for metaGGA
+  !    CALL v_xc_meta( rho, rho_core, rhog_core, etxc, vtxc, v%of_r, v%kin_r )
+  ! ENDIF
 
   CALL openfil_pp ( )
 
@@ -3169,7 +3169,7 @@ CONTAINS
     USE exx, ONLY : vexx
     USE fft_base, ONLY : dfftp
     USE fft_interfaces, ONLY : fwfft, invfft
-    USE funct, ONLY : exx_is_active
+    USE funct, ONLY : exx_is_active, dft_is_meta, get_meta
     USE gvect, ONLY : ngm, g
     USE io_files, ONLY : nwordwfc, iunwfc
     USE io_global, ONLY : ionode
@@ -3201,7 +3201,8 @@ CONTAINS
     complex (DP), allocatable :: mtxeld (:, :)
     complex (DP), allocatable :: mtxelo (:, :, :)
     real (DP), allocatable :: vxcr (:, :)
-    ! ======
+    real (DP), allocatable :: kedtaur (:, :)   !FZ: for metaGGA
+    
     complex (DP) :: hpsi(npwx*npol,nbnd)
     complex (DP), allocatable :: hc(:,:)
     integer :: nspin_
@@ -3237,9 +3238,7 @@ CONTAINS
 
     IF (ndiag .EQ. 0 .AND. noffdiag .EQ. 0) RETURN
 
-    ! ======
     ALLOCATE( hc( nbnd, nbnd) )
-    ! ------
     unit = 4
 
     iks = global_kpoint_index (nkstot, 1)
@@ -3255,13 +3254,22 @@ CONTAINS
     ENDIF
 
     ALLOCATE (vxcr (dfftp%nnr, nspin))
+    ALLOCATE (kedtaur (dfftp%nnr, nspin))   !FZ: for meta GGA
 
     vxcr (:, :) = 0.0D0
+    kedtaur (:, :) = 0.0D0    !FZ: for metaGGA
+
     IF ( vxc_zero_rho_core ) THEN
        rho_core ( : ) = 0.0D0
        rhog_core ( : ) = ( 0.0D0, 0.0D0 )
     ENDIF
-    CALL v_xc (rho, rho_core, rhog_core, etxc, vtxc, vxcr)
+    !> PW/src/v_of_rho.f90: L56
+    IF (dft_is_meta() .and. (get_meta() /= 4)) then
+       !> PW/src/v_of_rho.f90: L103
+       CALL v_xc_meta( rho, rho_core, rhog_core, etxc, vtxc, vxcr, kedtaur )
+    ELSE
+       CALL v_xc (rho, rho_core, rhog_core, etxc, vtxc, vxcr)
+    ENDIF
 
     DO ik = iks, ike
 
@@ -3285,6 +3293,7 @@ CONTAINS
        current_k = ikk
 
        CALL davcio (evc, 2*nwordwfc, iunwfc, ik - iks + 1, -1)
+
        ! h_psi.f90
        ! PW/src/vloc_psi.f90: we add two more subroutines, vloc_psi_nc_2 and vloc_psi_k_2
        !> lda = npwx, n = npw, m = nbnd, psi = evc
@@ -3364,6 +3373,7 @@ CONTAINS
 
     deallocate (hc)
     DEALLOCATE (vxcr)
+    DEALLOCATE (kedtaur)
 
     IF (ndiag .GT. 0) CALL mp_sum (mtxeld, inter_pool_comm)
     IF (noffdiag .GT. 0) CALL mp_sum (mtxelo, inter_pool_comm)
@@ -3464,7 +3474,7 @@ CONTAINS
     complex (DP), allocatable :: mtxelo (:, :, :)
     real (DP), allocatable :: vxcr (:, :)
     real (DP), allocatable :: kedtaur (:, :)   !FZ: for metaGGA
-    
+
     complex (DP) :: hpsi(npwx*npol,nbnd)
     complex (DP), allocatable :: hc(:,:)
     integer :: nspin_
@@ -3526,14 +3536,15 @@ CONTAINS
        rhog_core ( : ) = ( 0.0D0, 0.0D0 )
     ENDIF
 
-    IF (dft_is_meta() .and. (get_meta() /= 4)) then         !FZ: for metaGGA
-       CALL v_xc_meta( rho, rho_core, rhog_core, etxc, vtxc, vxcr, kedtaur )    !FZ: for metaGGA
+    !> PW/src/v_of_rho.f90: L56
+    IF (dft_is_meta() .and. (get_meta() /= 4)) then
+       !> PW/src/v_of_rho.f90: L103
+       CALL v_xc_meta( rho, rho_core, rhog_core, etxc, vtxc, vxcr, kedtaur )
     ELSE
        CALL v_xc (rho, rho_core, rhog_core, etxc, vtxc, vxcr)
     ENDIF
 
-    write(*,*) "use_ace = ", use_ace
-
+    ! write(*,*) "use_ace = ", use_ace
     ! IF (nkb > 0) THEN
     !    CALL allocate_bec_type (nkb, nbnd, becp, intra_bgrp_comm)
     ! ENDIF
@@ -3593,14 +3604,20 @@ CONTAINS
        ! This routine computes the specific contribution from the meta-GGA
        ! potential to H*psi; the result is added to hpsi
        if (dft_is_meta()) then
-          write(*,*) "AAA"
+          if (ionode) then
+             write(*,'(1X,A)') "Adding specific contribution from the metaGGA potential."
+             write(*,'(1X,A)')
+          endif
           call h_psi_meta (lda, n, m, evc, hpsi)
        endif
        !
        ! ... Here we add the Hubbard potential times psi = evc
        !
        IF ( lda_plus_u .AND. U_projection.NE."pseudo" ) THEN
-          write(*,*) "BBB"
+          if (ionode) then
+             write(*,'(1X,A)') "Adding the Hubbard potential."
+             write(*,'(1X,A)')
+          endif
           IF (noncolin) THEN
              CALL vhpsi_nc( lda, n, m, evc, hpsi )
           ELSE
@@ -3610,12 +3627,14 @@ CONTAINS
 
        !> PW/src/exx.f90
        IF ( exx_is_active() ) THEN
-          write(*,*) "CCC"
+          if (ionode) then
+             write(*,'(1X,A)') "Adding the hybrid functional potential."
+             write(*,'(1X,A)')
+          endif
           IF ( use_ace) THEN
              IF (gamma_only) THEN
                 CALL vexxace_gamma(lda, m, evc, ee, hpsi)
              ELSE
-                write(*,*) "DDD"
                 !> [BUGS HERE]
                 CALL vexxace_k(lda, m, evc, ee, hpsi)
              END IF

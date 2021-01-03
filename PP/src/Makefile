@@ -59,10 +59,11 @@ MODULES = $(PWOBJS) $(QEOBJS)
 TLDEPS= pwlibs
 
 all : tldeps open_grid.x average.x bands.x dos.x epsilon.x initial_state.x fs.x \
-      plan_avg.x plotband.x plotproj.x plotrho.x pmw.x pp.x projwfc.x \
-      pawplot.x sumpdos.x pw2wannier90.x pw2critic.x pw2gw.x \
-      wannier_ham.x wannier_plot.x molecularpdos.x \
-      pw2bgw.x wfck2r.x fermi_velocity.x fermi_proj.x ppacf.x
+       plan_avg.x plotband.x plotproj.x plotrho.x pmw.x pp.x projwfc.x \
+       pawplot.x sumpdos.x pw2wannier90.x pw2critic.x pw2gw.x \
+       wannier_ham.x wannier_plot.x molecularpdos.x \
+       pw2bgw.x wfck2r.x fermi_velocity.x fermi_proj.x ppacf.x
+#all : pw2bgw.x
 
 
 libpp.a : $(PPOBJS) 
