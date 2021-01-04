@@ -499,11 +499,11 @@ PROGRAM pw2bgw
   !! twfcollect=.true. ! ==> delete prefix.wfc* files after usage
   CALL hinit0()
 
-  ! !> [important]
-  ! IF (dft_is_meta()) then                           !FZ:  for metaGGA change062320
-  !    CALL rho_g2r ( dfftp, rho%kin_g, rho%kin_r )   !FZ:  for metaGGA
-  !    CALL v_xc_meta( rho, rho_core, rhog_core, etxc, vtxc, v%of_r, v%kin_r )
-  ! ENDIF
+  !> [important]
+  IF (dft_is_meta()) then                           !FZ:  for metaGGA change062320
+     CALL rho_g2r ( dfftp, rho%kin_g, rho%kin_r )   !FZ:  for metaGGA
+     CALL v_xc_meta( rho, rho_core, rhog_core, etxc, vtxc, v%of_r, v%kin_r )
+  ENDIF
 
   CALL openfil_pp ( )
 
@@ -3600,16 +3600,18 @@ CONTAINS
        !    ! CALL add_vuspsi( lda, n, m, hpsi )
        ! END IF
 
+       !> [??????]
        !> PW/src/h_psi_meta.f90
        ! This routine computes the specific contribution from the meta-GGA
        ! potential to H*psi; the result is added to hpsi
-       if (dft_is_meta()) then
-          if (ionode) then
-             write(*,'(1X,A)') "Adding specific contribution from the metaGGA potential."
-             write(*,'(1X,A)')
-          endif
-          call h_psi_meta (lda, n, m, evc, hpsi)
-       endif
+       ! if (dft_is_meta()) then
+       !    if (ionode) then
+       !       write(*,'(1X,A)') "Adding specific contribution from the metaGGA potential."
+       !       write(*,'(1X,A)')
+       !    endif
+       !    ! call h_psi_meta (lda, n, m, evc, hpsi)
+       ! endif
+       
        !
        ! ... Here we add the Hubbard potential times psi = evc
        !
@@ -3724,7 +3726,6 @@ CONTAINS
 
     ! xk(1:3) : crystal ==> cartesian
     CALL cryst_to_cart (nkstot, xk, bg, 1)
-
 
     IF (ndiag .GT. 0) DEALLOCATE (mtxeld)
     IF (noffdiag .GT. 0) DEALLOCATE (mtxelo)
