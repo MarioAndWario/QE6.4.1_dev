@@ -3616,10 +3616,10 @@ CONTAINS
        ! ... Here we add the Hubbard potential times psi = evc
        !
        IF ( lda_plus_u .AND. U_projection.NE."pseudo" ) THEN
-          if (ionode) then
-             write(*,'(1X,A)') "Adding the Hubbard potential."
-             write(*,'(1X,A)')
-          endif
+          ! if (ionode) then
+          !    write(*,'(1X,A)') "Adding the Hubbard potential."
+          !    write(*,'(1X,A)')
+          ! endif
           IF (noncolin) THEN
              CALL vhpsi_nc( lda, n, m, evc, hpsi )
           ELSE
@@ -3629,10 +3629,10 @@ CONTAINS
 
        !> PW/src/exx.f90
        IF ( exx_is_active() ) THEN
-          if (ionode) then
-             write(*,'(1X,A)') "Adding the hybrid functional potential."
-             write(*,'(1X,A)')
-          endif
+          ! if (ionode) then
+          !    write(*,'(1X,A)') "Adding the hybrid functional potential."
+          !    write(*,'(1X,A)')
+          ! endif
           IF ( use_ace) THEN
              IF (gamma_only) THEN
                 CALL vexxace_gamma(lda, m, evc, ee, hpsi)
