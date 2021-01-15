@@ -321,7 +321,7 @@ SUBROUTINE vloc_psi_k(lda, n, m, psi, v, hpsi)
         CALL invfft ('Wave', psic, dffts)
         !write (6,*) 'wfc R ' 
         !write (6,99) (psic(i), i=1,400)
-        !
+        !        
 !$omp parallel do
         DO j = 1, dffts%nnr
            psic (j) = psic (j) * v(j)
@@ -337,7 +337,7 @@ SUBROUTINE vloc_psi_k(lda, n, m, psi, v, hpsi)
 !$omp parallel do
         DO j = 1, n
            hpsi (j, ibnd)   = hpsi (j, ibnd)   + psic (dffts%nl(igk_k(j,current_k)))
-        ENDDO
+        ENDDO        
 !$omp end parallel do
         !write (6,*) 'v psi G ', ibnd
         !write (6,99) (psic(i), i=1,400)

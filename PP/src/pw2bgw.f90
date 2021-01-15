@@ -94,6 +94,7 @@
 !
 !-------------------------------------------------------------------------------
 
+!> [important] we only use one kpool, which means nks = nkstot
 PROGRAM pw2bgw
 
   USE constants, ONLY : eps12
@@ -107,9 +108,22 @@ PROGRAM pw2bgw
   USE mp_world, ONLY : world_comm
   USE mp_global, ONLY : mp_startup
   USE paw_variables, ONLY : okpaw
-  USE scf, ONLY : rho_core, rhog_core
+  USE scf, ONLY : rho_core, rhog_core, rho, v
   USE uspp, ONLY : okvan
   USE ldaU, ONLY : lda_plus_u
+  USE exx, ONLY : use_ace, local_thr, nbndproj, ecutfock, aceinit, exxinit
+  USE exx_base, ONLY : x_gamma_extrapolation, nq1, nq2, nq3, exxdiv_treatment, yukawa, ecutvcut, exx_grid_init, exx_mp_init, exx_div_check
+  USE funct, ONLY: set_exx_fraction, set_screening_parameter, dft_is_hybrid, exx_is_active, stop_exx, dft_is_meta
+  USE gvecw, ONLY : ecutwfc
+  USE ions_base, ONLY : nat, atm, ityp, tau
+  USE symm_base, ONLY : s, ftau, nsym, ft, time_reversal, find_sym
+  USE start_k, ONLY : nk1, nk2, nk3
+  USE loc_scdm, ONLY : use_scdm, localize_orbitals
+  USE loc_scdm_k, ONLY : localize_orbitals_k
+  USE loc_scdm,      ONLY : use_scdm, scdm_den, scdm_grd, n_scdm
+  USE input_parameters, ONLY : scdmden, scdmgrd, nscdm, n_proj, localization_thr, scdm, ace, nqx1, nqx2, nqx3
+  USE fft_rho,  ONLY : rho_g2r
+  USE fft_base,  ONLY : dfftp
 
   IMPLICIT NONE
 
@@ -137,13 +151,13 @@ PROGRAM pw2bgw
   character ( len = 256 ) :: vxcg_file
   logical :: vxc0_flag
   character ( len = 256 ) :: vxc0_file
+  character :: vxc_integral
   logical :: vxc_flag
   character ( len = 256 ) :: vxc_file
-  character :: vxc_integral
-  integer :: vxc_diag_nmin
-  integer :: vxc_diag_nmax
-  integer :: vxc_offdiag_nmin
-  integer :: vxc_offdiag_nmax
+  integer :: vxc_diag_nmin, vxc_diag_nmax, vxc_offdiag_nmin, vxc_offdiag_nmax
+  logical :: vxc_tot_flag
+  character ( len = 256 ) :: vxc_tot_file
+  integer :: vxc_tot_diag_nmin, vxc_tot_diag_nmax, vxc_tot_offdiag_nmin, vxc_tot_offdiag_nmax
   logical :: vxc_zero_rho_core
   logical :: vscg_flag
   character ( len = 256 ) :: vscg_file
@@ -156,6 +170,11 @@ PROGRAM pw2bgw
   logical :: vhub_flag
   character ( len = 256 ) :: vhub_file
   integer :: vhub_diag_nmin, vhub_diag_nmax, vhub_offdiag_nmin, vhub_offdiag_nmax
+  ! real(DP) :: localization_thr=0.0D0, screening_parameter=-1.0D0, exx_fraction=-1.0D0 !, ecutfock_=-1.0D0
+  real(DP) :: screening_parameter=-1.0D0, exx_fraction=-1.0D0 !, ecutfock_=-1.0D0
+  ! integer :: n_proj = 0
+  logical :: DoLoc = .false.
+  logical :: use_ace_ = .true.
 
   NAMELIST / input_pw2bgw / prefix, outdir, &
        real_or_complex, symm_type, wfng_flag, wfng_file, wfng_kgrid, &
@@ -166,12 +185,16 @@ PROGRAM pw2bgw
        vxc_offdiag_nmin, vxc_offdiag_nmax, vxc_zero_rho_core, &
        vscg_flag, vscg_file, vkbg_flag, vkbg_file, &
        use_hdf5, use_binary, flag_output_asc_wfn, flag_output_spin, flag_output_mirror, &
-       vhub_flag, vhub_file, vhub_diag_nmin, vhub_diag_nmax, vhub_offdiag_nmin, vhub_offdiag_nmax
+       vhub_flag, vhub_file, vhub_diag_nmin, vhub_diag_nmax, vhub_offdiag_nmin, vhub_offdiag_nmax, &
+       use_ace_, vxc_tot_flag, vxc_tot_file, vxc_tot_diag_nmin, vxc_tot_diag_nmax,  vxc_tot_offdiag_nmin, vxc_tot_offdiag_nmax
 
   integer :: ii, ios
   character ( len = 256 ) :: output_file_name
   character (len=256), external :: trimcheck
   character (len=1), external :: lowercase
+  REAL(DP), allocatable :: m_loc(:, :)
+  REAL(DP) :: etxc, vtxc  !FZ: change062320
+  ! REAL(DP) :: fock3 = 0.0D0
 
 #if defined(__MPI)
   CALL mp_startup ( )
@@ -211,6 +234,12 @@ PROGRAM pw2bgw
   vxc_diag_nmax = 0
   vxc_offdiag_nmin = 0
   vxc_offdiag_nmax = 0
+  vxc_tot_file = 'vxc_tot.dat'
+  vxc_tot_diag_nmin = 0
+  vxc_tot_diag_nmax = 0
+  vxc_tot_offdiag_nmin = 0
+  vxc_tot_offdiag_nmax = 0
+
   vxc_zero_rho_core = .TRUE.
   vscg_flag = .FALSE.
   vscg_file = 'VSC'
@@ -228,6 +257,37 @@ PROGRAM pw2bgw
   vhub_diag_nmax = 0
   vhub_offdiag_nmin = 0
   vhub_offdiag_nmax = 0
+
+  ! nq1 = nqx1
+  ! nq2 = nqx2
+  ! nq3 = nqx3
+  ! exxdiv_treatment_ = trim(exxdiv_treatment)
+  ! yukawa_   = yukawa
+  ! ecutvcut_ = ecutvcut
+  ! use_ace   = ace
+  ! nbndproj  = n_proj
+  ! local_thr = localization_thr
+
+  use_ace_ = .true.
+  use_scdm  = scdm
+  scdm_den = scdmden
+  scdm_grd = scdmgrd
+  n_scdm   = nscdm
+  ! write(*,*) "scdmden = ", scdmden, " scdmgrd = ", scdmgrd
+
+  ! IF ( ionode ) THEN
+  !    IF ( local_thr > 0.0_dp .AND. .NOT. use_ace ) then
+  !       CALL errore('input','localization without ACE not implemented',1)
+  !    ENDIF
+  ! ENDIF
+  ! IF (exx_fraction >= 0.0_DP) CALL set_exx_fraction (exx_fraction)
+  ! IF (screening_parameter >= 0.0_DP) &
+  !      & CALL set_screening_parameter (screening_parameter)
+
+  ! write(*,*) "x_gamma_extrapolation = ", x_gamma_extrapolation, " nq1 = ", nq1, " nq2 = ", nq2, " nq3 = ", nq3
+  ! write(*,*) "exxdiv_treatment = ", exxdiv_treatment, " yukawa = ", yukawa, " ecutvcut = ", ecutvcut, " use_ace = ", use_ace, " nbndproj = ", nbndproj, " local_thr = ", local_thr
+  ! write(*,*) "exx_fraction = ", exx_fraction, " ecutfock = ", ecutfock
+  ! write(*,*) "screening_parameter = ", screening_parameter
 
   IF ( ionode ) THEN
      ! flib/inpfile.f90:
@@ -297,6 +357,14 @@ PROGRAM pw2bgw
   CALL mp_bcast ( vxc_diag_nmax, ionode_id, world_comm )
   CALL mp_bcast ( vxc_offdiag_nmin, ionode_id, world_comm )
   CALL mp_bcast ( vxc_offdiag_nmax, ionode_id, world_comm )
+
+  CALL mp_bcast ( vxc_tot_flag, ionode_id, world_comm )
+  CALL mp_bcast ( vxc_tot_file, ionode_id, world_comm )
+  CALL mp_bcast ( vxc_tot_diag_nmin, ionode_id, world_comm )
+  CALL mp_bcast ( vxc_tot_diag_nmax, ionode_id, world_comm )
+  CALL mp_bcast ( vxc_tot_offdiag_nmin, ionode_id, world_comm )
+  CALL mp_bcast ( vxc_tot_offdiag_nmax, ionode_id, world_comm )
+
   CALL mp_bcast ( vxc_zero_rho_core, ionode_id, world_comm )
   CALL mp_bcast ( vscg_flag, ionode_id, world_comm )
   CALL mp_bcast ( vscg_file, ionode_id, world_comm )
@@ -313,6 +381,8 @@ PROGRAM pw2bgw
   CALL mp_bcast ( vhub_diag_nmax, ionode_id, world_comm )
   CALL mp_bcast ( vhub_offdiag_nmin, ionode_id, world_comm )
   CALL mp_bcast ( vhub_offdiag_nmax, ionode_id, world_comm )
+  CALL mp_bcast ( use_ace_, ionode_id, world_comm )
+
   ! ------
   ! PW/src/read_file.f90:
   ! [IMPORTANT]
@@ -364,6 +434,28 @@ PROGRAM pw2bgw
   !
   CALL read_file ( )
 
+  use_ace = use_ace_
+  IF ( dft_is_hybrid() ) THEN
+     IF ( local_thr > 0.0_dp .AND. .NOT. use_ace ) then
+        CALL errore('input','localization without ACE not implemented',1)
+     ENDIF
+     IF ( use_scdm ) CALL errore('input','use_scdm not yet implemented',1)
+     IF (exx_fraction >= 0.0_DP) CALL set_exx_fraction (exx_fraction)
+     IF (screening_parameter >= 0.0_DP) &
+          & CALL set_screening_parameter (screening_parameter)
+     DoLoc = local_thr.gt.0.0d0
+
+     ! write(*,*) "x_gamma_extrapolation = ", x_gamma_extrapolation, " nq1 = ", nq1, " nq2 = ", nq2, " nq3 = ", nq3
+     ! write(*,*) "exxdiv_treatment = ", exxdiv_treatment, " yukawa = ", yukawa, " ecutvcut = ", ecutvcut, " use_ace = ", use_ace, " nbndproj = ", nbndproj, " local_thr = ", local_thr
+     ! write(*,*) "exx_fraction = ", exx_fraction, " ecutfock = ", ecutfock
+     ! write(*,*) "screening_parameter = ", screening_parameter
+
+     !> [important]
+     !> exx_is_active() = T after read_file()
+     call stop_exx()
+  ENDIF
+  !> Force stop exx ==> exx_started = F, such that exxalfa can be initialized in exxinit()
+
   !! ======
   !! PW/src/read_file.f90:
   !! IF ( lsda ) THEN
@@ -393,6 +485,7 @@ PROGRAM pw2bgw
        call errore ( 'pw2bgw', 'Off-diagonal matrix elements of Vxc ' // &
        'with real wavefunctions are not implemented, compute them in ' // &
        'Sigma using VXC.', 7)
+
   ! PW/src/openfil.f90:
   ! open access to prefix.hub* (ready to write)
   CALL openfil()
@@ -406,6 +499,12 @@ PROGRAM pw2bgw
   !! twfcollect=.true. ! ==> delete prefix.wfc* files after usage
   CALL hinit0()
 
+  !> [important]
+  IF (dft_is_meta()) then                           !FZ:  for metaGGA change062320
+     CALL rho_g2r ( dfftp, rho%kin_g, rho%kin_r )   !FZ:  for metaGGA
+     CALL v_xc_meta( rho, rho_core, rhog_core, etxc, vtxc, v%of_r, v%kin_r )
+  ENDIF
+
   CALL openfil_pp ( )
 
   !! Atomic configuration dependent hamiltonian initialization
@@ -416,6 +515,46 @@ PROGRAM pw2bgw
      ENDIF
      CALL orthoUwfc()
   ENDIF
+
+  allocate(m_loc(3,nat))
+  m_loc = 0.0D0
+  ! write(*,*) "time_reversal = ", time_reversal
+  CALL find_sym ( nat, tau, ityp, .not.time_reversal, m_loc)
+  deallocate(m_loc)
+  !> Initialize hybrid functional calculations
+
+  ! IF (ecutfock <= 0.0_DP) THEN
+  !    ! default case
+  !    ecutfock_ = 4.0_DP*ecutwfc
+  ! ELSE
+  !    IF(ecutfock < ecutwfc .OR. ecutfock > ecutrho) CALL errore('iosys', &
+  !         'ecutfock can not be < ecutwfc or > ecutrho!', 1)
+  !    ecutfock_ = ecutfock
+  ! ENDIF
+
+  IF ( dft_is_hybrid() ) THEN
+     CALL exx_grid_init()
+     CALL exx_mp_init()
+     CALL exx_div_check()
+
+     write(*,*) "DoLoc = ", DoLoc
+     CALL exxinit(DoLoc)
+     IF( DoLoc.and.gamma_only) THEN
+        CALL localize_orbitals( )
+     ELSE IF (DoLoc) THEN
+        CALL localize_orbitals_k( )
+     END IF
+     IF (use_ace) THEN
+        ! CALL aceinit ( DoLoc, fock3)
+        CALL aceinit ( DoLoc)
+        ! write(*,*) "DoLoc = ", DoLoc, " fock3 = ", fock3
+     ENDIF
+  ENDIF
+
+  ! write(*,*) "x_gamma_extrapolation = ", x_gamma_extrapolation, " nq1 = ", nq1, " nq2 = ", nq2, " nq3 = ", nq3
+  ! write(*,*) "exxdiv_treatment = ", exxdiv_treatment, " yukawa = ", yukawa, " ecutvcut = ", ecutvcut, " use_ace = ", use_ace, " nbndproj = ", nbndproj, " local_thr = ", local_thr
+  ! write(*,*) "exx_fraction = ", exx_fraction, " ecutfock = ", ecutfock
+  ! write(*,*) "screening_parameter = ", screening_parameter
 
   if ( ionode ) WRITE ( 6, '("")' )
   ! For Norm-conserving PP calculations, we always use ecutrho = 4 * ecutwfc, which leads to identify dfftp and dffts (doublegrid = F)
@@ -465,13 +604,25 @@ PROGRAM pw2bgw
      IF ( vxc_integral .EQ. 'g' ) THEN
         IF ( ionode ) WRITE ( 6, '(5x,"call write_vxc_g")' )
         CALL start_clock ( 'write_vxc_g' )
-        CALL write_vxc_g ( output_file_name, &
-             vxc_diag_nmin, vxc_diag_nmax, &
-             vxc_offdiag_nmin, vxc_offdiag_nmax, &
-             vxc_zero_rho_core )
+        CALL write_vxc_g ( output_file_name, vxc_diag_nmin, vxc_diag_nmax, vxc_offdiag_nmin, vxc_offdiag_nmax, vxc_zero_rho_core )
         CALL stop_clock ( 'write_vxc_g' )
         IF ( ionode ) WRITE ( 6, '(5x,"done write_vxc_g",/)' )
+
+        ! IF ( ionode ) WRITE ( 6, '(5x,"call write_vxc_tot_g")' )
+        ! CALL start_clock ( 'write_vxc_tot_g' )
+        ! CALL write_vxc_tot_g ( output_file_name, vxc_diag_nmin, vxc_diag_nmax, vxc_offdiag_nmin, vxc_offdiag_nmax, vxc_zero_rho_core )
+        ! CALL stop_clock ( 'write_vxc_tot_g' )
+        ! IF ( ionode ) WRITE ( 6, '(5x,"done write_vxc_tot_g",/)' )
      ENDIF
+  ENDIF
+
+  IF ( vxc_tot_flag ) THEN
+     output_file_name = TRIM ( tmp_dir ) // TRIM ( vxc_tot_file )
+     IF ( ionode ) WRITE ( 6, '(5x,"call write_vxc_tot_g")' )
+     CALL start_clock ( 'write_vxc_tot_g' )
+     CALL write_vxc_tot_g ( output_file_name, vxc_tot_diag_nmin, vxc_tot_diag_nmax, vxc_tot_offdiag_nmin, vxc_tot_offdiag_nmax, vxc_zero_rho_core )
+     CALL stop_clock ( 'write_vxc_tot_g' )
+     IF ( ionode ) WRITE ( 6, '(5x,"done write_vxc_tot_g",/)' )
   ENDIF
 
   ! IF ( vscg_flag ) THEN
@@ -810,10 +961,10 @@ CONTAINS
          CALL errore ( 'write_wfng', 'cell_symmetry', ierr )
 
     ntran = nsym
-    DO i = 1, ntran       
+    DO i = 1, ntran
        ! ft_minus(1:3, i) = -ft(1:3, i)
        do id = 1, 3
-          !> If an entry of ft is 0.5, ft_minus = ft = 0.5          
+          !> If an entry of ft is 0.5, ft_minus = ft = 0.5
           if (ABS(ft(id, i) - 0.5D0) < 1.0D-12) then
              ft_minus(id, i) = 0.5D0
           else
@@ -1055,7 +1206,7 @@ CONTAINS
     !! ... While npwx_g serves as the LOWER bound of the NUMBER of all the
     !!     useful Gvectors
     !! -----------------------------------------
-    !! k vectors xk(1:3, 1:nkstot) from cartesian to crystal
+    !! k vectors xk(1:3, 1:nks=nkstot) from cartesian to crystal
 
     !! s^{T}_reci = s^{T}_cart \cdot A^{T}
     !! CALL cryst_to_cart ( nk_g / ns, xk, at, - 1 )
@@ -1548,7 +1699,7 @@ CONTAINS
 
        DO ib = 1, nb
           !> for kpoint ik_global not in current pool, igwx = 0, and we will not enter this loop.
-          wfng = ( 0.0D0, 0.0D0 )          
+          wfng = ( 0.0D0, 0.0D0 )
           !> if we have more than 1 kpoint pools
           IF ( npool .GT. 1 ) THEN
              IF ( ( ik .GE. iks ) .AND. ( ik .LE. ike ) ) THEN
@@ -1588,7 +1739,7 @@ CONTAINS
                    CALL mergewf ( evc(npwx+1:2*npwx, ib), wfng2, local_pw, igwf_l2g, me_pool, nproc_pool, root_pool, intra_pool_comm )
                 else
                    CALL mergewf ( evc(:, ib),              wfng, local_pw, igwf_l2g, me_pool, nproc_pool, root_pool, intra_pool_comm )
-                endif                
+                endif
 
                 ! IF (noncolin) THEN
                 !    ! ======
@@ -1615,14 +1766,14 @@ CONTAINS
              else
                 CALL mergewf ( evc(:, ib),              wfng, local_pw, igwf_l2g, mpime, nproc, ionode_id, world_comm )
              endif
-             
+
              ! IF (noncolin) THEN
              !    CALL mergewf_spinor( evc(:,ib), wfng, ngk_g(ik), local_pw, igwf_l2g, mpime, nproc, ionode_id, world_comm, npwx)
              !    ! After this mergewf_spinor, each pool-ROOT proc has the PWs for ib-th band and ik_global-th kvector.
              ! ELSE ! nspinor == 1
              !    CALL mergewf ( evc ( :, ib ), wfng, local_pw, igwf_l2g, mpime, nproc, ionode_id, world_comm )
              ! ENDIF
-             
+
           ENDIF
           ! <- nspin = 2 or (real_wfn, nspin = 1 )->
           IF ( proc_wf ) THEN
@@ -2125,13 +2276,13 @@ CONTAINS
     do itran = 1, ntran
        ! ft_minus(1:3,itran) = -ft(1:3,itran)
        do id = 1, 3
-          !> If an entry of ft is 0.5, ft_minus = ft = 0.5          
+          !> If an entry of ft is 0.5, ft_minus = ft = 0.5
           if (ABS(ft(id, itran) - 0.5D0) < 1.0D-12) then
              ft_minus(id, itran) = 0.5D0
           else
              ft_minus(id, itran) = - ft(id, itran)
           endif
-       enddo       
+       enddo
        s_transpose(1:3,1:3,itran) = transpose(s(1:3,1:3,itran))
     enddo
 
@@ -2499,519 +2650,518 @@ CONTAINS
 
   ! -------------------------------
 
-  SUBROUTINE write_vxcg ( output_file_name, real_or_complex, symm_type, &
-       vxc_zero_rho_core )
+  !   SUBROUTINE write_vxcg ( output_file_name, real_or_complex, symm_type, &
+  !        vxc_zero_rho_core )
 
-    USE cell_base, ONLY : omega, alat, tpiba, tpiba2, at, bg, ibrav
-    USE constants, ONLY : pi, tpi, eps6
-    USE ener, ONLY : etxc, vtxc
-    USE fft_base, ONLY : dfftp
-    USE fft_interfaces, ONLY : fwfft
-    USE gvect, ONLY : ngm, ngm_g, ig_l2g, mill, ecutrho
-    USE io_global, ONLY : ionode
-    USE ions_base, ONLY : nat, atm, ityp, tau
-    USE kinds, ONLY : DP
-    USE lsda_mod, ONLY : nspin
-    USE mp, ONLY : mp_sum
-    ! USE mp_bands, ONLY : intra_bgrp_comm
-    USE mp_pools, ONLY : intra_pool_comm
-    USE scf, ONLY : rho, rho_core, rhog_core
-    USE symm_base, ONLY : s, ftau, nsym
-    USE wavefunctions, ONLY : psic
-    USE matrix_inversion
+  !     USE cell_base, ONLY : omega, alat, tpiba, tpiba2, at, bg, ibrav
+  !     USE constants, ONLY : pi, tpi, eps6
+  !     USE ener, ONLY : etxc, vtxc
+  !     USE fft_base, ONLY : dfftp
+  !     USE fft_interfaces, ONLY : fwfft
+  !     USE gvect, ONLY : ngm, ngm_g, ig_l2g, mill, ecutrho
+  !     USE io_global, ONLY : ionode
+  !     USE ions_base, ONLY : nat, atm, ityp, tau
+  !     USE kinds, ONLY : DP
+  !     USE lsda_mod, ONLY : nspin
+  !     USE mp, ONLY : mp_sum
+  !     ! USE mp_bands, ONLY : intra_bgrp_comm
+  !     USE mp_pools, ONLY : intra_pool_comm
+  !     USE scf, ONLY : rho, rho_core, rhog_core
+  !     USE symm_base, ONLY : s, ftau, nsym
+  !     USE wavefunctions, ONLY : psic
+  !     USE matrix_inversion
 
-    IMPLICIT NONE
+  !     IMPLICIT NONE
 
-    character ( len = 256 ), intent (in) :: output_file_name
-    integer, intent (in) :: real_or_complex
-    character ( len = 9 ), intent (in) :: symm_type
-    logical, intent (in) :: vxc_zero_rho_core
+  !     character ( len = 256 ), intent (in) :: output_file_name
+  !     integer, intent (in) :: real_or_complex
+  !     character ( len = 9 ), intent (in) :: symm_type
+  !     logical, intent (in) :: vxc_zero_rho_core
 
-    character :: cdate*9, ctime*9, sdate*32, stime*32, stitle*32
-    integer :: unit, id, is, ir, ig, i, j, k, ierr
-    integer :: nd, ns, nr, ng_l, ng_g
-    integer :: ntran, cell_symmetry, nrecord
-    real (DP) :: alat2, recvol, t1 ( 3 ), t2 ( 3 )
-    real (DP) :: r1 ( 3, 3 ), r2 ( 3, 3 ), adot ( 3, 3 )
-    real (DP) :: bdot ( 3, 3 ), translation ( 3, 48 )
-    integer, allocatable :: g_g ( :, : )
-    real (DP), allocatable :: vxcr_g ( :, : )
-    complex (DP), allocatable :: vxcg_g ( :, : )
+  !     character :: cdate*9, ctime*9, sdate*32, stime*32, stitle*32
+  !     integer :: unit, id, is, ir, ig, i, j, k, ierr
+  !     integer :: nd, ns, nr, ng_l, ng_g
+  !     integer :: ntran, cell_symmetry, nrecord
+  !     real (DP) :: alat2, recvol, t1 ( 3 ), t2 ( 3 )
+  !     real (DP) :: r1 ( 3, 3 ), r2 ( 3, 3 ), adot ( 3, 3 )
+  !     real (DP) :: bdot ( 3, 3 ), translation ( 3, 48 )
+  !     integer, allocatable :: g_g ( :, : )
+  !     real (DP), allocatable :: vxcr_g ( :, : )
+  !     complex (DP), allocatable :: vxcg_g ( :, : )
 
-    INTEGER, EXTERNAL :: atomic_number
+  !     INTEGER, EXTERNAL :: atomic_number
 
-    CALL date_and_tim ( cdate, ctime )
-    WRITE ( sdate, '(A2,"-",A3,"-",A4,21X)' ) cdate(1:2), cdate(3:5), cdate(6:9)
-    WRITE ( stime, '(A8,24X)' ) ctime(1:8)
-    IF ( real_or_complex .EQ. 1 ) THEN
-       WRITE ( stitle, '("VXC-Real",24X)' )
-    ELSE
-       WRITE ( stitle, '("VXC-Complex",21X)' )
-    ENDIF
+  !     CALL date_and_tim ( cdate, ctime )
+  !     WRITE ( sdate, '(A2,"-",A3,"-",A4,21X)' ) cdate(1:2), cdate(3:5), cdate(6:9)
+  !     WRITE ( stime, '(A8,24X)' ) ctime(1:8)
+  !     IF ( real_or_complex .EQ. 1 ) THEN
+  !        WRITE ( stitle, '("VXC-Real",24X)' )
+  !     ELSE
+  !        WRITE ( stitle, '("VXC-Complex",21X)' )
+  !     ENDIF
 
-    unit = 4
-    nrecord = 1
-    nd = 3
+  !     unit = 4
+  !     nrecord = 1
+  !     nd = 3
 
-    ns = nspin
-    nr = dfftp%nnr
-    ng_l = ngm
-    ng_g = ngm_g
+  !     ns = nspin
+  !     nr = dfftp%nnr
+  !     ng_l = ngm
+  !     ng_g = ngm_g
 
-    ierr = 0
-    IF ( ibrav .EQ. 0 ) THEN
-       IF ( TRIM ( symm_type ) .EQ. 'cubic' ) THEN
-          cell_symmetry = 0
-       ELSEIF ( TRIM ( symm_type ) .EQ. 'hexagonal' ) THEN
-          cell_symmetry = 1
-       ELSE
-          ierr = 1
-       ENDIF
-    ELSEIF ( abs ( ibrav ) .GE. 1 .AND. abs ( ibrav ) .LE. 3 ) THEN
-       cell_symmetry = 0
-    ELSEIF ( abs ( ibrav ) .GE. 4 .AND. abs ( ibrav ) .LE. 5 ) THEN
-       cell_symmetry = 1
-    ELSEIF ( abs ( ibrav ) .GE. 6 .AND. abs ( ibrav ) .LE. 14 ) THEN
-       cell_symmetry = 0
-    ELSE
-       ierr = 1
-    ENDIF
-    IF ( ierr .GT. 0 ) &
-         CALL errore ( 'write_vxcg', 'cell_symmetry', ierr )
+  !     ierr = 0
+  !     IF ( ibrav .EQ. 0 ) THEN
+  !        IF ( TRIM ( symm_type ) .EQ. 'cubic' ) THEN
+  !           cell_symmetry = 0
+  !        ELSEIF ( TRIM ( symm_type ) .EQ. 'hexagonal' ) THEN
+  !           cell_symmetry = 1
+  !        ELSE
+  !           ierr = 1
+  !        ENDIF
+  !     ELSEIF ( abs ( ibrav ) .GE. 1 .AND. abs ( ibrav ) .LE. 3 ) THEN
+  !        cell_symmetry = 0
+  !     ELSEIF ( abs ( ibrav ) .GE. 4 .AND. abs ( ibrav ) .LE. 5 ) THEN
+  !        cell_symmetry = 1
+  !     ELSEIF ( abs ( ibrav ) .GE. 6 .AND. abs ( ibrav ) .LE. 14 ) THEN
+  !        cell_symmetry = 0
+  !     ELSE
+  !        ierr = 1
+  !     ENDIF
+  !     IF ( ierr .GT. 0 ) &
+  !          CALL errore ( 'write_vxcg', 'cell_symmetry', ierr )
 
-    ntran = nsym
-    DO i = 1, ntran
-       DO j = 1, nd
-          DO k = 1, nd
-             r1 ( k, j ) = dble ( s ( k, j, i ) )
-          ENDDO
-       ENDDO
-       CALL invmat ( 3, r1, r2 )
-       t1 ( 1 ) = dble ( ftau ( 1, i ) ) / dble ( dfftp%nr1 )
-       t1 ( 2 ) = dble ( ftau ( 2, i ) ) / dble ( dfftp%nr2 )
-       t1 ( 3 ) = dble ( ftau ( 3, i ) ) / dble ( dfftp%nr3 )
-       DO j = 1, nd
-          t2 ( j ) = 0.0D0
-          DO k = 1, nd
-             t2 ( j ) = t2 ( j ) + r2 ( k, j ) * t1 ( k )
-          ENDDO
-          IF ( t2 ( j ) .GE. eps6 + 0.5D0 ) &
-               t2 ( j ) = t2 ( j ) - dble ( int ( t2 ( j ) + 0.5D0 ) )
-          IF ( t2 ( j ) .LT. eps6 - 0.5D0 ) &
-               t2 ( j ) = t2 ( j ) - dble ( int ( t2 ( j ) - 0.5D0 ) )
-       ENDDO
-       DO j = 1, nd
-          translation ( j, i ) = t2 ( j ) * tpi
-       ENDDO
-    ENDDO
+  !     ntran = nsym
+  !     DO i = 1, ntran
+  !        DO j = 1, nd
+  !           DO k = 1, nd
+  !              r1 ( k, j ) = dble ( s ( k, j, i ) )
+  !           ENDDO
+  !        ENDDO
+  !        CALL invmat ( 3, r1, r2 )
+  !        t1 ( 1 ) = dble ( ftau ( 1, i ) ) / dble ( dfftp%nr1 )
+  !        t1 ( 2 ) = dble ( ftau ( 2, i ) ) / dble ( dfftp%nr2 )
+  !        t1 ( 3 ) = dble ( ftau ( 3, i ) ) / dble ( dfftp%nr3 )
+  !        DO j = 1, nd
+  !           t2 ( j ) = 0.0D0
+  !           DO k = 1, nd
+  !              t2 ( j ) = t2 ( j ) + r2 ( k, j ) * t1 ( k )
+  !           ENDDO
+  !           IF ( t2 ( j ) .GE. eps6 + 0.5D0 ) &
+  !                t2 ( j ) = t2 ( j ) - dble ( int ( t2 ( j ) + 0.5D0 ) )
+  !           IF ( t2 ( j ) .LT. eps6 - 0.5D0 ) &
+  !                t2 ( j ) = t2 ( j ) - dble ( int ( t2 ( j ) - 0.5D0 ) )
+  !        ENDDO
+  !        DO j = 1, nd
+  !           translation ( j, i ) = t2 ( j ) * tpi
+  !        ENDDO
+  !     ENDDO
 
-    CALL check_inversion ( real_or_complex, nsym, s, nspin, .true., .true., translation )
+  !     CALL check_inversion ( real_or_complex, nsym, s, nspin, .true., .true., translation )
 
-    alat2 = alat ** 2
-    recvol = 8.0D0 * pi**3 / omega
+  !     alat2 = alat ** 2
+  !     recvol = 8.0D0 * pi**3 / omega
 
-    DO i = 1, nd
-       DO j = 1, nd
-          adot ( j, i ) = 0.0D0
-       ENDDO
-    ENDDO
-    DO i = 1, nd
-       DO j = 1, nd
-          DO k = 1, nd
-             adot ( j, i ) = adot ( j, i ) + &
-                  at ( k, j ) * at ( k, i ) * alat2
-          ENDDO
-       ENDDO
-    ENDDO
+  !     DO i = 1, nd
+  !        DO j = 1, nd
+  !           adot ( j, i ) = 0.0D0
+  !        ENDDO
+  !     ENDDO
+  !     DO i = 1, nd
+  !        DO j = 1, nd
+  !           DO k = 1, nd
+  !              adot ( j, i ) = adot ( j, i ) + &
+  !                   at ( k, j ) * at ( k, i ) * alat2
+  !           ENDDO
+  !        ENDDO
+  !     ENDDO
 
-    DO i = 1, nd
-       DO j = 1, nd
-          bdot ( j, i ) = 0.0D0
-       ENDDO
-    ENDDO
-    DO i = 1, nd
-       DO j = 1, nd
-          DO k = 1, nd
-             bdot ( j, i ) = bdot ( j, i ) + &
-                  bg ( k, j ) * bg ( k, i ) * tpiba2
-          ENDDO
-       ENDDO
-    ENDDO
+  !     DO i = 1, nd
+  !        DO j = 1, nd
+  !           bdot ( j, i ) = 0.0D0
+  !        ENDDO
+  !     ENDDO
+  !     DO i = 1, nd
+  !        DO j = 1, nd
+  !           DO k = 1, nd
+  !              bdot ( j, i ) = bdot ( j, i ) + &
+  !                   bg ( k, j ) * bg ( k, i ) * tpiba2
+  !           ENDDO
+  !        ENDDO
+  !     ENDDO
 
-    ALLOCATE ( g_g ( nd, ng_g ) )
-    ALLOCATE ( vxcr_g ( nr, ns ) )
-    ALLOCATE ( vxcg_g ( ng_g, ns ) )
+  !     ALLOCATE ( g_g ( nd, ng_g ) )
+  !     ALLOCATE ( vxcr_g ( nr, ns ) )
+  !     ALLOCATE ( vxcg_g ( ng_g, ns ) )
 
-    DO ig = 1, ng_g
-       DO id = 1, nd
-          g_g ( id, ig ) = 0
-       ENDDO
-    ENDDO
-    DO is = 1, ns
-       DO ig = 1, ng_g
-          vxcg_g ( ig, is ) = ( 0.0D0, 0.0D0 )
-       ENDDO
-    ENDDO
+  !     DO ig = 1, ng_g
+  !        DO id = 1, nd
+  !           g_g ( id, ig ) = 0
+  !        ENDDO
+  !     ENDDO
+  !     DO is = 1, ns
+  !        DO ig = 1, ng_g
+  !           vxcg_g ( ig, is ) = ( 0.0D0, 0.0D0 )
+  !        ENDDO
+  !     ENDDO
 
-    DO ig = 1, ng_l
-       g_g ( 1, ig_l2g ( ig ) ) = mill ( 1, ig )
-       g_g ( 2, ig_l2g ( ig ) ) = mill ( 2, ig )
-       g_g ( 3, ig_l2g ( ig ) ) = mill ( 3, ig )
-    ENDDO
-    vxcr_g ( :, : ) = 0.0D0
-    IF ( vxc_zero_rho_core ) THEN
-       rho_core ( : ) = 0.0D0
-       rhog_core ( : ) = ( 0.0D0, 0.0D0 )
-    ENDIF
-    CALL v_xc ( rho, rho_core, rhog_core, etxc, vtxc, vxcr_g )
-    DO is = 1, ns
-       DO ir = 1, nr
-          psic ( ir ) = CMPLX ( vxcr_g ( ir, is ), 0.0D0, KIND=dp )
-       ENDDO
-       CALL fwfft ( 'Rho', psic, dfftp )
-       DO ig = 1, ng_l
-          vxcg_g ( ig_l2g ( ig ), is ) = psic ( dfftp%nl ( ig ) )
-       ENDDO
-    ENDDO
+  !     DO ig = 1, ng_l
+  !        g_g ( 1, ig_l2g ( ig ) ) = mill ( 1, ig )
+  !        g_g ( 2, ig_l2g ( ig ) ) = mill ( 2, ig )
+  !        g_g ( 3, ig_l2g ( ig ) ) = mill ( 3, ig )
+  !     ENDDO
+  !     vxcr_g ( :, : ) = 0.0D0
+  !     IF ( vxc_zero_rho_core ) THEN
+  !        rho_core ( : ) = 0.0D0
+  !        rhog_core ( : ) = ( 0.0D0, 0.0D0 )
+  !     ENDIF
+  !     CALL v_xc ( rho, rho_core, rhog_core, etxc, vtxc, vxcr_g )
+  !     DO is = 1, ns
+  !        DO ir = 1, nr
+  !           psic ( ir ) = CMPLX ( vxcr_g ( ir, is ), 0.0D0, KIND=dp )
+  !        ENDDO
+  !        CALL fwfft ( 'Rho', psic, dfftp )
+  !        DO ig = 1, ng_l
+  !           vxcg_g ( ig_l2g ( ig ), is ) = psic ( dfftp%nl ( ig ) )
+  !        ENDDO
+  !     ENDDO
 
-    ! ======
-    !! intra_pool_comm = intra_bgrp_comm
-    ! CALL mp_sum ( g_g, intra_bgrp_comm )
-    ! CALL mp_sum ( vxcg_g, intra_bgrp_comm )
-    CALL mp_sum ( g_g, intra_pool_comm )
-    CALL mp_sum ( vxcg_g, intra_pool_comm )
+  !     ! ======
+  !     !! intra_pool_comm = intra_bgrp_comm
+  !     ! CALL mp_sum ( g_g, intra_bgrp_comm )
+  !     ! CALL mp_sum ( vxcg_g, intra_bgrp_comm )
+  !     CALL mp_sum ( g_g, intra_pool_comm )
+  !     CALL mp_sum ( vxcg_g, intra_pool_comm )
 
-    IF ( ionode ) THEN
-       OPEN ( unit = unit, file = TRIM ( output_file_name ), &
-            form = 'unformatted', status = 'replace' )
-       WRITE ( unit ) stitle, sdate, stime
-       WRITE ( unit ) ns, ng_g, ntran, cell_symmetry, nat, ecutrho
-       WRITE ( unit ) dfftp%nr1, dfftp%nr2, dfftp%nr3
-       WRITE ( unit ) omega, alat, ( ( at ( j, i ), j = 1, nd ), i = 1, nd ), &
-            ( ( adot ( j, i ), j = 1, nd ), i = 1, nd )
-       WRITE ( unit ) recvol, tpiba, ( ( bg ( j, i ), j = 1, nd ), i = 1, nd ), &
-            ( ( bdot ( j, i ), j = 1, nd ), i = 1, nd )
-       WRITE ( unit ) ( ( ( s ( k, j, i ), k = 1, nd ), j = 1, nd ), i = 1, ntran )
-       WRITE ( unit ) ( ( translation ( j, i ), j = 1, nd ), i = 1, ntran )
-       WRITE ( unit ) ( ( tau ( j, i ), j = 1, nd ), atomic_number ( atm ( ityp ( i ) ) ), i = 1, nat )
-       WRITE ( unit ) nrecord
-       WRITE ( unit ) ng_g
-       WRITE ( unit ) ( ( g_g ( id, ig ), id = 1, nd ), ig = 1, ng_g )
-       WRITE ( unit ) nrecord
-       WRITE ( unit ) ng_g
-       IF ( real_or_complex .EQ. 1 ) THEN
-          WRITE ( unit ) ( ( dble ( vxcg_g ( ig, is ) ), &
-               ig = 1, ng_g ), is = 1, ns )
-       ELSE
-          WRITE ( unit ) ( ( vxcg_g ( ig, is ), &
-               ig = 1, ng_g ), is = 1, ns )
-       ENDIF
-       CLOSE ( unit = unit, status = 'keep' )
-    ENDIF
+  !     IF ( ionode ) THEN
+  !        OPEN ( unit = unit, file = TRIM ( output_file_name ), &
+  !             form = 'unformatted', status = 'replace' )
+  !        WRITE ( unit ) stitle, sdate, stime
+  !        WRITE ( unit ) ns, ng_g, ntran, cell_symmetry, nat, ecutrho
+  !        WRITE ( unit ) dfftp%nr1, dfftp%nr2, dfftp%nr3
+  !        WRITE ( unit ) omega, alat, ( ( at ( j, i ), j = 1, nd ), i = 1, nd ), &
+  !             ( ( adot ( j, i ), j = 1, nd ), i = 1, nd )
+  !        WRITE ( unit ) recvol, tpiba, ( ( bg ( j, i ), j = 1, nd ), i = 1, nd ), &
+  !             ( ( bdot ( j, i ), j = 1, nd ), i = 1, nd )
+  !        WRITE ( unit ) ( ( ( s ( k, j, i ), k = 1, nd ), j = 1, nd ), i = 1, ntran )
+  !        WRITE ( unit ) ( ( translation ( j, i ), j = 1, nd ), i = 1, ntran )
+  !        WRITE ( unit ) ( ( tau ( j, i ), j = 1, nd ), atomic_number ( atm ( ityp ( i ) ) ), i = 1, nat )
+  !        WRITE ( unit ) nrecord
+  !        WRITE ( unit ) ng_g
+  !        WRITE ( unit ) ( ( g_g ( id, ig ), id = 1, nd ), ig = 1, ng_g )
+  !        WRITE ( unit ) nrecord
+  !        WRITE ( unit ) ng_g
+  !        IF ( real_or_complex .EQ. 1 ) THEN
+  !           WRITE ( unit ) ( ( dble ( vxcg_g ( ig, is ) ), &
+  !                ig = 1, ng_g ), is = 1, ns )
+  !        ELSE
+  !           WRITE ( unit ) ( ( vxcg_g ( ig, is ), &
+  !                ig = 1, ng_g ), is = 1, ns )
+  !        ENDIF
+  !        CLOSE ( unit = unit, status = 'keep' )
+  !     ENDIF
 
-    DEALLOCATE ( vxcg_g )
-    DEALLOCATE ( vxcr_g )
-    DEALLOCATE ( g_g )
+  !     DEALLOCATE ( vxcg_g )
+  !     DEALLOCATE ( vxcr_g )
+  !     DEALLOCATE ( g_g )
 
-    RETURN
+  !     RETURN
 
-  END SUBROUTINE write_vxcg
+  !   END SUBROUTINE write_vxcg
+
+  !   !-------------------------------------------------------------------------------
+
+  !   SUBROUTINE write_vxc0 ( output_file_name, vxc_zero_rho_core )
+
+  !     USE constants, ONLY : RYTOEV
+  !     USE ener, ONLY : etxc, vtxc
+  !     USE fft_base, ONLY : dfftp
+  !     USE fft_interfaces, ONLY : fwfft
+  !     USE gvect, ONLY : ngm, mill
+  !     USE io_global, ONLY : ionode
+  !     USE kinds, ONLY : DP
+  !     USE lsda_mod, ONLY : nspin
+  !     USE mp, ONLY : mp_sum
+  !     ! USE mp_bands, ONLY : intra_bgrp_comm
+  !     USE mp_pools, ONLY : intra_pool_comm
+  !     USE scf, ONLY : rho, rho_core, rhog_core
+  !     USE wavefunctions, ONLY : psic
+
+  !     IMPLICIT NONE
+
+  !     character ( len = 256 ), intent (in) :: output_file_name
+  !     logical, intent (in) :: vxc_zero_rho_core
+
+  !     integer :: unit
+  !     integer :: is, ir, ig
+  !     integer :: nd, ns, nr, ng_l
+  !     real (DP), allocatable :: vxcr_g ( :, : )
+  !     complex (DP), allocatable :: vxc0_g ( : )
+
+  !     unit = 4
+  !     nd = 3
+
+  !     ns = nspin
+  !     nr = dfftp%nnr
+  !     ng_l = ngm
+
+  !     ALLOCATE ( vxcr_g ( nr, ns ) )
+  !     ALLOCATE ( vxc0_g ( ns ) )
+
+  !     DO is = 1, ns
+  !        vxc0_g ( is ) = ( 0.0D0, 0.0D0 )
+  !     ENDDO
+
+  !     vxcr_g ( :, : ) = 0.0D0
+  !     IF ( vxc_zero_rho_core ) THEN
+  !        rho_core ( : ) = 0.0D0
+  !        rhog_core ( : ) = ( 0.0D0, 0.0D0 )
+  !     ENDIF
+  !     CALL v_xc ( rho, rho_core, rhog_core, etxc, vtxc, vxcr_g )
+  !     DO is = 1, ns
+  !        DO ir = 1, nr
+  !           psic ( ir ) = CMPLX ( vxcr_g ( ir, is ), 0.0D0, KIND=dp )
+  !        ENDDO
+  !        CALL fwfft ( 'Rho', psic, dfftp )
+  !        DO ig = 1, ng_l
+  !           IF ( mill ( 1, ig ) .EQ. 0 .AND. mill ( 2, ig ) .EQ. 0 .AND. &
+  !                mill ( 3, ig ) .EQ. 0 ) vxc0_g ( is ) = psic ( dfftp%nl ( ig ) )
+  !        ENDDO
+  !     ENDDO
+
+  !     ! ======
+  !     !! intra_bgrp_comm = intra_pool_comm
+  !     ! CALL mp_sum ( vxc0_g, intra_bgrp_comm )
+  !     CALL mp_sum ( vxc0_g, intra_pool_comm )
+
+  !     DO is = 1, ns
+  !        vxc0_g ( is ) = vxc0_g ( is ) * CMPLX ( RYTOEV, 0.0D0, KIND=dp )
+  !     ENDDO
+
+  !     IF ( ionode ) THEN
+  !        OPEN (unit = unit, file = TRIM (output_file_name), &
+  !             form = 'formatted', status = 'replace')
+  !        WRITE ( unit, 101 )
+  !        DO is = 1, ns
+  !           WRITE ( unit, 102 ) is, vxc0_g ( is )
+  !        ENDDO
+  !        WRITE ( unit, 103 )
+  !        CLOSE (unit = unit, status = 'keep')
+  !     ENDIF
+
+  !     DEALLOCATE ( vxcr_g )
+  !     DEALLOCATE ( vxc0_g )
+
+  !     RETURN
+
+  ! 101 FORMAT ( /, 5X, "--------------------------------------------", &
+  !          /, 5X, "spin    Re Vxc(G=0) (eV)    Im Vxc(G=0) (eV)", &
+  !          /, 5X, "--------------------------------------------" )
+  ! 102 FORMAT ( 5X, I1, 3X, 2F20.15 )
+  ! 103 FORMAT ( 5X, "--------------------------------------------", / )
+
+  !   END SUBROUTINE write_vxc0
+
+  !   !-------------------------------------------------------------------------------
+
+  !   SUBROUTINE write_vxc_r (output_file_name, diag_nmin, diag_nmax, &
+  !        offdiag_nmin, offdiag_nmax, vxc_zero_rho_core)
+
+  !     USE kinds, ONLY : DP
+  !     USE constants, ONLY : rytoev
+  !     USE cell_base, ONLY : tpiba2, at, bg
+  !     USE ener, ONLY : etxc, vtxc
+  !     USE fft_base, ONLY : dfftp
+  !     USE fft_interfaces, ONLY : invfft
+  !     USE gvect, ONLY : ngm, g
+  !     USE io_files, ONLY : nwordwfc, iunwfc
+  !     USE io_global, ONLY : ionode
+  !     USE klist, ONLY : xk, nkstot, nks, ngk, igk_k
+  !     USE lsda_mod, ONLY : nspin, isk
+  !     USE mp, ONLY : mp_sum
+  !     USE mp_pools, ONLY : inter_pool_comm
+  !     ! USE mp_bands, ONLY : intra_bgrp_comm
+  !     USE mp_pools, ONLY : intra_pool_comm
+  !     USE scf, ONLY : rho, rho_core, rhog_core
+  !     USE wavefunctions, ONLY : evc, psic
+  !     USE wvfct, ONLY : nbnd
+
+  !     IMPLICIT NONE
+
+  !     character (len = 256), intent (in) :: output_file_name
+  !     integer, intent (inout) :: diag_nmin
+  !     integer, intent (inout) :: diag_nmax
+  !     integer, intent (inout) :: offdiag_nmin
+  !     integer, intent (inout) :: offdiag_nmax
+  !     logical, intent (in) :: vxc_zero_rho_core
+
+  !     integer :: npw, ik, is, ib, ig, ir, unit, iks, ike, ndiag, noffdiag, ib2
+  !     integer, external :: global_kpoint_index
+  !     real (DP) :: dummyr
+  !     complex (DP) :: dummyc
+  !     real (DP), allocatable :: mtxeld (:, :)
+  !     complex (DP), allocatable :: mtxelo (:, :, :)
+  !     real (DP), allocatable :: vxcr (:, :)
+  !     complex (DP), allocatable :: psic2 (:)
+
+  !     if(diag_nmin > diag_nmax) then
+  !        call errore ( 'write_vxc_r', 'diag_nmin > diag_nmax', diag_nmin )
+  !     endif
+  !     IF (diag_nmin .LT. 1) diag_nmin = 1
+  !     IF (diag_nmax .GT. nbnd) then
+  !        if (ionode) then
+  !           write(0,'(a,i6)') 'WARNING: resetting diag_nmax to max number of bands', nbnd
+  !        endif
+  !        diag_nmax = nbnd
+  !     ENDIF
+  !     ndiag = MAX (diag_nmax - diag_nmin + 1, 0)
+
+  !     if(offdiag_nmin > offdiag_nmax) then
+  !        if (ionode) then
+  !           call errore ( 'write_vxc_r', 'offdiag_nmin > offdiag_nmax', offdiag_nmin )
+  !        endif
+  !     endif
+  !     IF (offdiag_nmin .LT. 1) offdiag_nmin = 1
+  !     IF (offdiag_nmax .GT. nbnd)  then
+  !        if (ionode) then
+  !           write(0,'(a,i6)') 'WARNING: resetting offdiag_nmax to max number of bands', nbnd
+  !        endif
+  !        offdiag_nmax = nbnd
+  !     ENDIF
+  !     noffdiag = MAX (offdiag_nmax - offdiag_nmin + 1, 0)
+
+  !     IF (ndiag .EQ. 0 .AND. noffdiag .EQ. 0) RETURN
+
+  !     unit = 4
+
+  !     iks = global_kpoint_index (nkstot, 1)
+  !     ike = iks + nks - 1
+
+  !     IF (ndiag .GT. 0) THEN
+  !        ALLOCATE (mtxeld (ndiag, nkstot))
+  !        mtxeld (:, :) = 0.0D0
+  !     ENDIF
+  !     IF (noffdiag .GT. 0) THEN
+  !        ALLOCATE (mtxelo (noffdiag, noffdiag, nkstot))
+  !        mtxelo (:, :, :) = (0.0D0, 0.0D0)
+  !     ENDIF
+
+  !     ALLOCATE (vxcr (dfftp%nnr, nspin))
+  !     IF (noffdiag .GT. 0) ALLOCATE (psic2 (dfftp%nnr))
+
+  !     vxcr (:, :) = 0.0D0
+  !     IF ( vxc_zero_rho_core ) THEN
+  !        rho_core ( : ) = 0.0D0
+  !        rhog_core ( : ) = ( 0.0D0, 0.0D0 )
+  !     ENDIF
+  !     CALL v_xc (rho, rho_core, rhog_core, etxc, vtxc, vxcr)
+
+  !     DO ik = iks, ike
+  !        npw = ngk ( ik - iks + 1 )
+  !        CALL davcio (evc, 2*nwordwfc, iunwfc, ik - iks + 1, -1)
+  !        IF (ndiag .GT. 0) THEN
+  !           DO ib = diag_nmin, diag_nmax
+  !              psic (:) = (0.0D0, 0.0D0)
+  !              DO ig = 1, npw
+  !                 psic (dfftp%nl (igk_k (ig,ik-iks+1))) = evc (ig, ib)
+  !              ENDDO
+  !              CALL invfft ('Rho', psic, dfftp)
+  !              dummyr = 0.0D0
+  !              DO ir = 1, dfftp%nnr
+  !                 dummyr = dummyr + vxcr (ir, isk (ik)) &
+  !                      * (dble (psic (ir)) **2 + aimag (psic (ir)) **2)
+  !              ENDDO
+  !              dummyr = dummyr * rytoev / dble (dfftp%nr1x * dfftp%nr2x * dfftp%nr3x)
+  !              ! ======
+  !              !! intra_pool_comm = intra_bgrp_comm
+  !              ! CALL mp_sum (dummyr, intra_bgrp_comm)
+  !              CALL mp_sum (dummyr, intra_pool_comm)
+  !              mtxeld (ib - diag_nmin + 1, ik) = dummyr
+  !           ENDDO
+  !        ENDIF
+  !        IF (noffdiag .GT. 0) THEN
+  !           DO ib = offdiag_nmin, offdiag_nmax
+  !              psic (:) = (0.0D0, 0.0D0)
+  !              DO ig = 1, npw
+  !                 psic (dfftp%nl (igk_k (ig,ik-iks+1))) = evc (ig, ib)
+  !              ENDDO
+  !              CALL invfft ('Rho', psic, dfftp)
+  !              DO ib2 = offdiag_nmin, offdiag_nmax
+  !                 psic2 (:) = (0.0D0, 0.0D0)
+  !                 DO ig = 1, npw
+  !                    psic2 (dfftp%nl (igk_k (ig,ik-iks+1))) = evc (ig, ib2)
+  !                 ENDDO
+  !                 CALL invfft ('Rho', psic2, dfftp)
+  !                 dummyc = (0.0D0, 0.0D0)
+  !                 DO ir = 1, dfftp%nnr
+  !                    dummyc = dummyc + CMPLX (vxcr (ir, isk (ik)), 0.0D0, KIND=dp) &
+  !                         * conjg (psic2 (ir)) * psic (ir)
+  !                 ENDDO
+  !                 dummyc = dummyc &
+  !                      * CMPLX (rytoev / dble (dfftp%nr1x * dfftp%nr2x * dfftp%nr3x), &
+  !                      0.0D0, KIND=dp)
+  !                 ! ======
+  !                 !! intra_pool_comm = intra_bgrp_comm
+  !                 ! CALL mp_sum (dummyc, intra_bgrp_comm)
+  !                 CALL mp_sum (dummyc, intra_pool_comm)
+  !                 mtxelo (ib2 - offdiag_nmin + 1, ib - offdiag_nmin &
+  !                      + 1, ik) = dummyc
+  !              ENDDO
+  !           ENDDO
+  !        ENDIF
+  !     ENDDO
+
+  !     DEALLOCATE (vxcr)
+  !     IF (noffdiag .GT. 0) DEALLOCATE (psic2)
+
+  !     IF (ndiag .GT. 0) CALL mp_sum (mtxeld, inter_pool_comm)
+  !     IF (noffdiag .GT. 0) CALL mp_sum (mtxelo, inter_pool_comm)
+
+  !     CALL cryst_to_cart (nkstot, xk, at, -1)
+
+  !     IF (ionode) THEN
+  !        OPEN (unit = unit, file = TRIM (output_file_name), &
+  !             form = 'formatted', status = 'replace')
+  !        DO ik = 1, nkstot / nspin
+  !           WRITE (unit, 101) xk(:, ik), nspin * ndiag, &
+  !                nspin * noffdiag **2
+  !           DO is = 1, nspin
+  !              IF (ndiag .GT. 0) THEN
+  !                 DO ib = diag_nmin, diag_nmax
+  !                    WRITE (unit, 102) is, ib, mtxeld &
+  !                         (ib - diag_nmin + 1, ik + (is - 1) * nkstot / nspin), &
+  !                         0.0D0
+  !                 ENDDO
+  !              ENDIF
+  !              IF (noffdiag .GT. 0) THEN
+  !                 DO ib = offdiag_nmin, offdiag_nmax
+  !                    DO ib2 = offdiag_nmin, offdiag_nmax
+  !                       WRITE (unit, 103) is, ib2, ib, mtxelo &
+  !                            (ib2 - offdiag_nmin + 1, ib - offdiag_nmin + 1, &
+  !                            ik + (is - 1) * nkstot / nspin)
+  !                    ENDDO
+  !                 ENDDO
+  !              ENDIF
+  !           ENDDO
+  !        ENDDO
+  !        CLOSE (unit = unit, status = 'keep')
+  !     ENDIF
+
+  !     CALL cryst_to_cart (nkstot, xk, bg, 1)
+
+  !     IF (ndiag .GT. 0) DEALLOCATE (mtxeld)
+  !     IF (noffdiag .GT. 0) DEALLOCATE (mtxelo)
+
+  !     RETURN
+
+  ! 101 FORMAT (3F13.9, 2I8)
+  ! 102 FORMAT (2I8, 2F15.9)
+  ! 103 FORMAT (3I8, 2F15.9)
+
+  !   END SUBROUTINE write_vxc_r
 
   !-------------------------------------------------------------------------------
 
-  SUBROUTINE write_vxc0 ( output_file_name, vxc_zero_rho_core )
-
-    USE constants, ONLY : RYTOEV
-    USE ener, ONLY : etxc, vtxc
-    USE fft_base, ONLY : dfftp
-    USE fft_interfaces, ONLY : fwfft
-    USE gvect, ONLY : ngm, mill
-    USE io_global, ONLY : ionode
-    USE kinds, ONLY : DP
-    USE lsda_mod, ONLY : nspin
-    USE mp, ONLY : mp_sum
-    ! USE mp_bands, ONLY : intra_bgrp_comm
-    USE mp_pools, ONLY : intra_pool_comm
-    USE scf, ONLY : rho, rho_core, rhog_core
-    USE wavefunctions, ONLY : psic
-
-    IMPLICIT NONE
-
-    character ( len = 256 ), intent (in) :: output_file_name
-    logical, intent (in) :: vxc_zero_rho_core
-
-    integer :: unit
-    integer :: is, ir, ig
-    integer :: nd, ns, nr, ng_l
-    real (DP), allocatable :: vxcr_g ( :, : )
-    complex (DP), allocatable :: vxc0_g ( : )
-
-    unit = 4
-    nd = 3
-
-    ns = nspin
-    nr = dfftp%nnr
-    ng_l = ngm
-
-    ALLOCATE ( vxcr_g ( nr, ns ) )
-    ALLOCATE ( vxc0_g ( ns ) )
-
-    DO is = 1, ns
-       vxc0_g ( is ) = ( 0.0D0, 0.0D0 )
-    ENDDO
-
-    vxcr_g ( :, : ) = 0.0D0
-    IF ( vxc_zero_rho_core ) THEN
-       rho_core ( : ) = 0.0D0
-       rhog_core ( : ) = ( 0.0D0, 0.0D0 )
-    ENDIF
-    CALL v_xc ( rho, rho_core, rhog_core, etxc, vtxc, vxcr_g )
-    DO is = 1, ns
-       DO ir = 1, nr
-          psic ( ir ) = CMPLX ( vxcr_g ( ir, is ), 0.0D0, KIND=dp )
-       ENDDO
-       CALL fwfft ( 'Rho', psic, dfftp )
-       DO ig = 1, ng_l
-          IF ( mill ( 1, ig ) .EQ. 0 .AND. mill ( 2, ig ) .EQ. 0 .AND. &
-               mill ( 3, ig ) .EQ. 0 ) vxc0_g ( is ) = psic ( dfftp%nl ( ig ) )
-       ENDDO
-    ENDDO
-
-    ! ======
-    !! intra_bgrp_comm = intra_pool_comm
-    ! CALL mp_sum ( vxc0_g, intra_bgrp_comm )
-    CALL mp_sum ( vxc0_g, intra_pool_comm )
-
-    DO is = 1, ns
-       vxc0_g ( is ) = vxc0_g ( is ) * CMPLX ( RYTOEV, 0.0D0, KIND=dp )
-    ENDDO
-
-    IF ( ionode ) THEN
-       OPEN (unit = unit, file = TRIM (output_file_name), &
-            form = 'formatted', status = 'replace')
-       WRITE ( unit, 101 )
-       DO is = 1, ns
-          WRITE ( unit, 102 ) is, vxc0_g ( is )
-       ENDDO
-       WRITE ( unit, 103 )
-       CLOSE (unit = unit, status = 'keep')
-    ENDIF
-
-    DEALLOCATE ( vxcr_g )
-    DEALLOCATE ( vxc0_g )
-
-    RETURN
-
-101 FORMAT ( /, 5X, "--------------------------------------------", &
-         /, 5X, "spin    Re Vxc(G=0) (eV)    Im Vxc(G=0) (eV)", &
-         /, 5X, "--------------------------------------------" )
-102 FORMAT ( 5X, I1, 3X, 2F20.15 )
-103 FORMAT ( 5X, "--------------------------------------------", / )
-
-  END SUBROUTINE write_vxc0
-
-  !-------------------------------------------------------------------------------
-
-  SUBROUTINE write_vxc_r (output_file_name, diag_nmin, diag_nmax, &
-       offdiag_nmin, offdiag_nmax, vxc_zero_rho_core)
-
-    USE kinds, ONLY : DP
-    USE constants, ONLY : rytoev
-    USE cell_base, ONLY : tpiba2, at, bg
-    USE ener, ONLY : etxc, vtxc
-    USE fft_base, ONLY : dfftp
-    USE fft_interfaces, ONLY : invfft
-    USE gvect, ONLY : ngm, g
-    USE io_files, ONLY : nwordwfc, iunwfc
-    USE io_global, ONLY : ionode
-    USE klist, ONLY : xk, nkstot, nks, ngk, igk_k
-    USE lsda_mod, ONLY : nspin, isk
-    USE mp, ONLY : mp_sum
-    USE mp_pools, ONLY : inter_pool_comm
-    ! USE mp_bands, ONLY : intra_bgrp_comm
-    USE mp_pools, ONLY : intra_pool_comm
-    USE scf, ONLY : rho, rho_core, rhog_core
-    USE wavefunctions, ONLY : evc, psic
-    USE wvfct, ONLY : nbnd
-
-    IMPLICIT NONE
-
-    character (len = 256), intent (in) :: output_file_name
-    integer, intent (inout) :: diag_nmin
-    integer, intent (inout) :: diag_nmax
-    integer, intent (inout) :: offdiag_nmin
-    integer, intent (inout) :: offdiag_nmax
-    logical, intent (in) :: vxc_zero_rho_core
-
-    integer :: npw, ik, is, ib, ig, ir, unit, iks, ike, ndiag, noffdiag, ib2
-    integer, external :: global_kpoint_index
-    real (DP) :: dummyr
-    complex (DP) :: dummyc
-    real (DP), allocatable :: mtxeld (:, :)
-    complex (DP), allocatable :: mtxelo (:, :, :)
-    real (DP), allocatable :: vxcr (:, :)
-    complex (DP), allocatable :: psic2 (:)
-
-    if(diag_nmin > diag_nmax) then
-       call errore ( 'write_vxc_r', 'diag_nmin > diag_nmax', diag_nmin )
-    endif
-    IF (diag_nmin .LT. 1) diag_nmin = 1
-    IF (diag_nmax .GT. nbnd) then
-       if (ionode) then
-          write(0,'(a,i6)') 'WARNING: resetting diag_nmax to max number of bands', nbnd
-       endif
-       diag_nmax = nbnd
-    ENDIF
-    ndiag = MAX (diag_nmax - diag_nmin + 1, 0)
-
-    if(offdiag_nmin > offdiag_nmax) then
-       if (ionode) then
-          call errore ( 'write_vxc_r', 'offdiag_nmin > offdiag_nmax', offdiag_nmin )
-       endif
-    endif
-    IF (offdiag_nmin .LT. 1) offdiag_nmin = 1
-    IF (offdiag_nmax .GT. nbnd)  then
-       if (ionode) then
-          write(0,'(a,i6)') 'WARNING: resetting offdiag_nmax to max number of bands', nbnd
-       endif
-       offdiag_nmax = nbnd
-    ENDIF
-    noffdiag = MAX (offdiag_nmax - offdiag_nmin + 1, 0)
-
-    IF (ndiag .EQ. 0 .AND. noffdiag .EQ. 0) RETURN
-
-    unit = 4
-
-    iks = global_kpoint_index (nkstot, 1)
-    ike = iks + nks - 1
-
-    IF (ndiag .GT. 0) THEN
-       ALLOCATE (mtxeld (ndiag, nkstot))
-       mtxeld (:, :) = 0.0D0
-    ENDIF
-    IF (noffdiag .GT. 0) THEN
-       ALLOCATE (mtxelo (noffdiag, noffdiag, nkstot))
-       mtxelo (:, :, :) = (0.0D0, 0.0D0)
-    ENDIF
-
-    ALLOCATE (vxcr (dfftp%nnr, nspin))
-    IF (noffdiag .GT. 0) ALLOCATE (psic2 (dfftp%nnr))
-
-    vxcr (:, :) = 0.0D0
-    IF ( vxc_zero_rho_core ) THEN
-       rho_core ( : ) = 0.0D0
-       rhog_core ( : ) = ( 0.0D0, 0.0D0 )
-    ENDIF
-    CALL v_xc (rho, rho_core, rhog_core, etxc, vtxc, vxcr)
-
-    DO ik = iks, ike
-       npw = ngk ( ik - iks + 1 )
-       CALL davcio (evc, 2*nwordwfc, iunwfc, ik - iks + 1, -1)
-       IF (ndiag .GT. 0) THEN
-          DO ib = diag_nmin, diag_nmax
-             psic (:) = (0.0D0, 0.0D0)
-             DO ig = 1, npw
-                psic (dfftp%nl (igk_k (ig,ik-iks+1))) = evc (ig, ib)
-             ENDDO
-             CALL invfft ('Rho', psic, dfftp)
-             dummyr = 0.0D0
-             DO ir = 1, dfftp%nnr
-                dummyr = dummyr + vxcr (ir, isk (ik)) &
-                     * (dble (psic (ir)) **2 + aimag (psic (ir)) **2)
-             ENDDO
-             dummyr = dummyr * rytoev / dble (dfftp%nr1x * dfftp%nr2x * dfftp%nr3x)
-             ! ======
-             !! intra_pool_comm = intra_bgrp_comm
-             ! CALL mp_sum (dummyr, intra_bgrp_comm)
-             CALL mp_sum (dummyr, intra_pool_comm)
-             mtxeld (ib - diag_nmin + 1, ik) = dummyr
-          ENDDO
-       ENDIF
-       IF (noffdiag .GT. 0) THEN
-          DO ib = offdiag_nmin, offdiag_nmax
-             psic (:) = (0.0D0, 0.0D0)
-             DO ig = 1, npw
-                psic (dfftp%nl (igk_k (ig,ik-iks+1))) = evc (ig, ib)
-             ENDDO
-             CALL invfft ('Rho', psic, dfftp)
-             DO ib2 = offdiag_nmin, offdiag_nmax
-                psic2 (:) = (0.0D0, 0.0D0)
-                DO ig = 1, npw
-                   psic2 (dfftp%nl (igk_k (ig,ik-iks+1))) = evc (ig, ib2)
-                ENDDO
-                CALL invfft ('Rho', psic2, dfftp)
-                dummyc = (0.0D0, 0.0D0)
-                DO ir = 1, dfftp%nnr
-                   dummyc = dummyc + CMPLX (vxcr (ir, isk (ik)), 0.0D0, KIND=dp) &
-                        * conjg (psic2 (ir)) * psic (ir)
-                ENDDO
-                dummyc = dummyc &
-                     * CMPLX (rytoev / dble (dfftp%nr1x * dfftp%nr2x * dfftp%nr3x), &
-                     0.0D0, KIND=dp)
-                ! ======
-                !! intra_pool_comm = intra_bgrp_comm
-                ! CALL mp_sum (dummyc, intra_bgrp_comm)
-                CALL mp_sum (dummyc, intra_pool_comm)
-                mtxelo (ib2 - offdiag_nmin + 1, ib - offdiag_nmin &
-                     + 1, ik) = dummyc
-             ENDDO
-          ENDDO
-       ENDIF
-    ENDDO
-
-    DEALLOCATE (vxcr)
-    IF (noffdiag .GT. 0) DEALLOCATE (psic2)
-
-    IF (ndiag .GT. 0) CALL mp_sum (mtxeld, inter_pool_comm)
-    IF (noffdiag .GT. 0) CALL mp_sum (mtxelo, inter_pool_comm)
-
-    CALL cryst_to_cart (nkstot, xk, at, -1)
-
-    IF (ionode) THEN
-       OPEN (unit = unit, file = TRIM (output_file_name), &
-            form = 'formatted', status = 'replace')
-       DO ik = 1, nkstot / nspin
-          WRITE (unit, 101) xk(:, ik), nspin * ndiag, &
-               nspin * noffdiag **2
-          DO is = 1, nspin
-             IF (ndiag .GT. 0) THEN
-                DO ib = diag_nmin, diag_nmax
-                   WRITE (unit, 102) is, ib, mtxeld &
-                        (ib - diag_nmin + 1, ik + (is - 1) * nkstot / nspin), &
-                        0.0D0
-                ENDDO
-             ENDIF
-             IF (noffdiag .GT. 0) THEN
-                DO ib = offdiag_nmin, offdiag_nmax
-                   DO ib2 = offdiag_nmin, offdiag_nmax
-                      WRITE (unit, 103) is, ib2, ib, mtxelo &
-                           (ib2 - offdiag_nmin + 1, ib - offdiag_nmin + 1, &
-                           ik + (is - 1) * nkstot / nspin)
-                   ENDDO
-                ENDDO
-             ENDIF
-          ENDDO
-       ENDDO
-       CLOSE (unit = unit, status = 'keep')
-    ENDIF
-
-    CALL cryst_to_cart (nkstot, xk, bg, 1)
-
-    IF (ndiag .GT. 0) DEALLOCATE (mtxeld)
-    IF (noffdiag .GT. 0) DEALLOCATE (mtxelo)
-
-    RETURN
-
-101 FORMAT (3F13.9, 2I8)
-102 FORMAT (2I8, 2F15.9)
-103 FORMAT (3I8, 2F15.9)
-
-  END SUBROUTINE write_vxc_r
-
-  !-------------------------------------------------------------------------------
-
-  SUBROUTINE write_vxc_g (output_file_name, diag_nmin, diag_nmax, &
-       offdiag_nmin, offdiag_nmax, vxc_zero_rho_core)
+  SUBROUTINE write_vxc_g (output_file_name, diag_nmin, diag_nmax, offdiag_nmin, offdiag_nmax, vxc_zero_rho_core)
 
     USE constants, ONLY : rytoev
     USE cell_base, ONLY : tpiba2, at, bg
@@ -3019,7 +3169,7 @@ CONTAINS
     USE exx, ONLY : vexx
     USE fft_base, ONLY : dfftp
     USE fft_interfaces, ONLY : fwfft, invfft
-    USE funct, ONLY : exx_is_active
+    USE funct, ONLY : exx_is_active, dft_is_meta, get_meta
     USE gvect, ONLY : ngm, g
     USE io_files, ONLY : nwordwfc, iunwfc
     USE io_global, ONLY : ionode
@@ -3051,11 +3201,13 @@ CONTAINS
     complex (DP), allocatable :: mtxeld (:, :)
     complex (DP), allocatable :: mtxelo (:, :, :)
     real (DP), allocatable :: vxcr (:, :)
-    ! ======
+    real (DP), allocatable :: kedtaur (:, :)   !FZ: for metaGGA
+    
     complex (DP) :: hpsi(npwx*npol,nbnd)
     complex (DP), allocatable :: hc(:,:)
     integer :: nspin_
     integer :: kdim, kdmx
+    ! integer :: lda, n, m
 
     ! ------
     if(diag_nmin > diag_nmax) then
@@ -3086,9 +3238,7 @@ CONTAINS
 
     IF (ndiag .EQ. 0 .AND. noffdiag .EQ. 0) RETURN
 
-    ! ======
     ALLOCATE( hc( nbnd, nbnd) )
-    ! ------
     unit = 4
 
     iks = global_kpoint_index (nkstot, 1)
@@ -3104,13 +3254,22 @@ CONTAINS
     ENDIF
 
     ALLOCATE (vxcr (dfftp%nnr, nspin))
+    ALLOCATE (kedtaur (dfftp%nnr, nspin))   !FZ: for meta GGA
 
     vxcr (:, :) = 0.0D0
+    kedtaur (:, :) = 0.0D0    !FZ: for metaGGA
+
     IF ( vxc_zero_rho_core ) THEN
        rho_core ( : ) = 0.0D0
        rhog_core ( : ) = ( 0.0D0, 0.0D0 )
     ENDIF
-    CALL v_xc (rho, rho_core, rhog_core, etxc, vtxc, vxcr)
+    !> PW/src/v_of_rho.f90: L56
+    IF (dft_is_meta() .and. (get_meta() /= 4)) then
+       !> PW/src/v_of_rho.f90: L103
+       CALL v_xc_meta( rho, rho_core, rhog_core, etxc, vtxc, vxcr, kedtaur )
+    ELSE
+       CALL v_xc (rho, rho_core, rhog_core, etxc, vtxc, vxcr)
+    ENDIF
 
     DO ik = iks, ike
 
@@ -3134,15 +3293,53 @@ CONTAINS
        current_k = ikk
 
        CALL davcio (evc, 2*nwordwfc, iunwfc, ik - iks + 1, -1)
+
        ! h_psi.f90
        ! PW/src/vloc_psi.f90: we add two more subroutines, vloc_psi_nc_2 and vloc_psi_k_2
+       !> lda = npwx, n = npw, m = nbnd, psi = evc
        IF ( noncolin ) THEN
           CALL vloc_psi_nc( npwx, npw, nbnd, evc, vxcr, hpsi)
        ELSE
           CALL vloc_psi_k( npwx, npw, nbnd, evc, vxcr(1, current_spin), hpsi)
        ENDIF
 
-       IF ( exx_is_active() ) CALL vexx( npwx, npw, nbnd, evc, hpsi)
+       ! IF ( exx_is_active() ) then
+       !    if (ionode) then
+       !       call errore ( 'write_vxc_g', 'exx not supported', 1 )
+       !    endif
+       ! ENDIF
+
+       ! lda = npwx
+       ! n = npw
+       ! m = nbnd
+       ! !> [WORKING]
+       ! if (dft_is_meta()) call h_psi_meta (lda, n, m, evc, hpsi)
+       ! !
+       ! ! ... Here we add the Hubbard potential times psi
+       ! !
+       ! IF ( lda_plus_u .AND. U_projection.NE."pseudo" ) THEN
+       !    !
+       !    IF (noncolin) THEN
+       !       CALL vhpsi_nc( lda, n, m, evc, hpsi )
+       !    ELSE
+       !       call vhpsi( lda, n, m, evc, hpsi )
+       !    ENDIF
+       !    !
+       ! ENDIF
+
+       ! !> [WORKING]
+       ! ! IF ( exx_is_active() ) CALL vexx( npwx, npw, nbnd, evc, hpsi)
+       ! IF ( exx_is_active() ) THEN
+       !    IF ( use_ace) THEN
+       !       IF (gamma_only) THEN
+       !          CALL vexxace_gamma(lda, m, psi, ee, hpsi)
+       !       ELSE
+       !          CALL vexxace_k(lda, m, psi, ee, hpsi)
+       !       END IF
+       !    ELSE
+       !       CALL vexx( lda, n, m, psi, hpsi, becp )
+       !    END IF
+       ! END IF
 
        ! ======
        ! C := alpha*op( A )*op( B ) + beta*C,
@@ -3176,6 +3373,7 @@ CONTAINS
 
     deallocate (hc)
     DEALLOCATE (vxcr)
+    DEALLOCATE (kedtaur)
 
     IF (ndiag .GT. 0) CALL mp_sum (mtxeld, inter_pool_comm)
     IF (noffdiag .GT. 0) CALL mp_sum (mtxelo, inter_pool_comm)
@@ -3230,6 +3428,316 @@ CONTAINS
 
   END SUBROUTINE write_vxc_g
 
+  !> This subroutine put vxc + vhub + vmetagga + vexx into vxc.dat
+  SUBROUTINE write_vxc_tot_g (output_file_name, diag_nmin, diag_nmax, offdiag_nmin, offdiag_nmax, vxc_zero_rho_core)
+    USE constants, ONLY : rytoev
+    USE cell_base, ONLY : tpiba2, at, bg
+    USE ener, ONLY : etxc, vtxc
+    USE exx,      ONLY : use_ace, vexx, vexxace_gamma, vexxace_k
+    USE fft_base, ONLY : dfftp
+    USE fft_interfaces, ONLY : fwfft, invfft
+    USE funct, ONLY : exx_is_active, dft_is_meta, get_meta, dft_is_hybrid
+    USE gvect, ONLY : ngm, g
+    USE io_files, ONLY : nwordwfc, iunwfc, nwordwfcU, iunhub
+    USE io_global, ONLY : ionode
+    USE kinds, ONLY : DP
+    USE klist, ONLY : xk, nkstot, nks, ngk, igk_k
+    USE lsda_mod, ONLY : nspin, isk, current_spin, lsda
+    USE mp, ONLY : mp_sum
+    USE mp_pools, ONLY : inter_pool_comm
+    USE mp_bands, ONLY : intra_bgrp_comm
+    USE mp_pools, ONLY : intra_pool_comm
+    USE scf, ONLY : rho, rho_core, rhog_core
+    USE wavefunctions, ONLY : evc, psic
+    USE wvfct, ONLY : npwx, nbnd, current_k
+    USE noncollin_module , ONLY : noncolin , npol
+    USE realus,   ONLY : real_space
+    USE buffers, ONLY : get_buffer
+    USE ldaU, ONLY : lda_plus_u, U_projection, wfcU, offsetU, Hubbard_l, nwfcU, Hubbard_lmax, is_hubbard
+    USE uspp,     ONLY : vkb, nkb
+    USE becmod,   ONLY : bec_type, becp, calbec, allocate_bec_type, deallocate_bec_type
+    USE control_flags,    ONLY : gamma_only
+
+    IMPLICIT NONE
+
+    character (len = 256), intent (in) :: output_file_name
+    integer, intent (inout) :: diag_nmin
+    integer, intent (inout) :: diag_nmax
+    integer, intent (inout) :: offdiag_nmin
+    integer, intent (inout) :: offdiag_nmax
+    logical, intent (in) :: vxc_zero_rho_core
+
+    integer :: npw, ik, is, ib, ig, ir, unit, iks, ike, ndiag, noffdiag, ib2, ikk
+    integer, external :: global_kpoint_index
+    complex (DP) :: dummy
+    complex (DP), allocatable :: mtxeld (:, :)
+    complex (DP), allocatable :: mtxelo (:, :, :)
+    real (DP), allocatable :: vxcr (:, :)
+    real (DP), allocatable :: kedtaur (:, :)   !FZ: for metaGGA
+
+    complex (DP) :: hpsi(npwx*npol,nbnd)
+    complex (DP), allocatable :: hc(:,:)
+    integer :: nspin_
+    integer :: kdim, kdmx
+    integer :: lda, n, m
+    real (DP) :: ee
+
+    if (diag_nmin > diag_nmax) then
+       call errore ( 'write_vxc_tot_g', 'diag_nmin > diag_nmax', diag_nmin )
+    endif
+    IF (diag_nmin .LT. 1) diag_nmin = 1
+    IF (diag_nmax .GT. nbnd) then
+       if (ionode) then
+          write(0,'(a,i6)') 'WARNING: resetting diag_nmax to max number of bands', nbnd
+       endif
+       diag_nmax = nbnd
+    ENDIF
+    ndiag = MAX (diag_nmax - diag_nmin + 1, 0)
+
+    if (offdiag_nmin > offdiag_nmax) then
+       if (ionode) then
+          call errore ( 'write_vxc_tot_g', 'offdiag_nmin > offdiag_nmax', offdiag_nmin )
+       endif
+    endif
+    IF (offdiag_nmin .LT. 1) offdiag_nmin = 1
+    IF (offdiag_nmax .GT. nbnd)  then
+       if (ionode) then
+          write(0,'(a,i6)') 'WARNING: resetting offdiag_nmax to max number of bands', nbnd
+       endif
+       offdiag_nmax = nbnd
+    ENDIF
+    noffdiag = MAX (offdiag_nmax - offdiag_nmin + 1, 0)
+
+    IF (ndiag .EQ. 0 .AND. noffdiag .EQ. 0) RETURN
+
+    ALLOCATE( hc( nbnd, nbnd) )
+    unit = 4
+
+    iks = global_kpoint_index (nkstot, 1)
+    ike = iks + nks - 1
+
+    IF (ndiag .GT. 0) THEN
+       ALLOCATE (mtxeld (ndiag, nkstot))
+       mtxeld (:, :) = (0.0D0, 0.0D0)
+    ENDIF
+    IF (noffdiag .GT. 0) THEN
+       ALLOCATE (mtxelo (noffdiag, noffdiag, nkstot))
+       mtxelo (:, :, :) = (0.0D0, 0.0D0)
+    ENDIF
+
+    ALLOCATE (vxcr (dfftp%nnr, nspin))
+    ALLOCATE (kedtaur (dfftp%nnr, nspin))   !FZ: for meta GGA
+
+    vxcr (:, :) = 0.0D0
+    kedtaur (:, :) = 0.0D0    !FZ: for metaGGA
+
+    IF ( vxc_zero_rho_core ) THEN
+       rho_core ( : ) = 0.0D0
+       rhog_core ( : ) = ( 0.0D0, 0.0D0 )
+    ENDIF
+
+    !> PW/src/v_of_rho.f90: L56
+    IF (dft_is_meta() .and. (get_meta() /= 4)) then
+       !> PW/src/v_of_rho.f90: L103
+       CALL v_xc_meta( rho, rho_core, rhog_core, etxc, vtxc, vxcr, kedtaur )
+    ELSE
+       CALL v_xc (rho, rho_core, rhog_core, etxc, vtxc, vxcr)
+    ENDIF
+
+    ! write(*,*) "use_ace = ", use_ace
+    ! IF (nkb > 0) THEN
+    !    CALL allocate_bec_type (nkb, nbnd, becp, intra_bgrp_comm)
+    ! ENDIF
+
+    DO ik = iks, ike
+
+       hpsi(:,:) = (0.0D0, 0.0D0)
+       evc(:,:) = (0.0D0, 0.0D0)
+       hc(:,:) = (0.0D0,0.0D0)
+       !! ikk = ik_local
+       ikk = ik - iks + 1
+       npw = ngk ( ik - iks + 1 )
+
+       IF ( npol == 1 ) THEN
+          kdim = npw
+          kdmx = npwx
+       ELSE
+          kdim = npwx*npol
+          kdmx = npwx*npol
+       ENDIF
+
+       IF ( lsda ) current_spin = isk(ikk)
+       ! ! current_k will be used in vloc_psi_nc and vloc_psi_k
+       current_k = ikk
+
+       CALL davcio (evc, 2*nwordwfc, iunwfc, ik - iks + 1, -1)
+
+       ! IF ( nkb > 0 ) THEN
+       !    CALL init_us_2( npw, igk_k(1,ik-iks+1), xk(1,ik-iks+1), vkb )
+       ! ENDIF
+       ! write(*,*) "SIZE(vkb,1) = ", SIZE(vkb, 1), " SIZE(evc,1) = ", SIZE(evc,1), " SIZE(becp, 1) = ", SIZE(becp, 1)
+
+       IF ( lda_plus_u .AND. (U_projection .NE. 'pseudo') ) THEN
+          CALL get_buffer ( wfcU, nwordwfcU, iunhub, ikk )
+       ENDIF
+
+       !> h_psi.f90
+       !> PW/src/vloc_psi.f90: we add two more subroutines, vloc_psi_nc_2 and vloc_psi_k_2
+       !> lda = npwx, n = npw, m = nbnd, psi = evc
+       IF ( noncolin ) THEN
+          CALL vloc_psi_nc( npwx, npw, nbnd, evc, vxcr, hpsi)
+       ELSE
+          CALL vloc_psi_k( npwx, npw, nbnd, evc, vxcr(1, current_spin), hpsi)
+       ENDIF
+
+       lda = npwx
+       n = npw
+       m = nbnd
+       ! IF ( nkb > 0 .AND. .NOT. real_space) THEN
+       !    ! CALL start_clock( 'h_psi:calbec' )
+       !    CALL calbec ( n, vkb, evc, becp, m )
+       !    ! CALL stop_clock( 'h_psi:calbec' )
+       !    ! CALL add_vuspsi( lda, n, m, hpsi )
+       ! END IF
+
+       !> [??????]
+       !> PW/src/h_psi_meta.f90
+       ! This routine computes the specific contribution from the meta-GGA
+       ! potential to H*psi; the result is added to hpsi
+       ! if (dft_is_meta()) then
+       !    if (ionode) then
+       !       write(*,'(1X,A)') "Adding specific contribution from the metaGGA potential."
+       !       write(*,'(1X,A)')
+       !    endif
+       !    ! call h_psi_meta (lda, n, m, evc, hpsi)
+       ! endif
+       
+       !
+       ! ... Here we add the Hubbard potential times psi = evc
+       !
+       IF ( lda_plus_u .AND. U_projection.NE."pseudo" ) THEN
+          ! if (ionode) then
+          !    write(*,'(1X,A)') "Adding the Hubbard potential."
+          !    write(*,'(1X,A)')
+          ! endif
+          IF (noncolin) THEN
+             CALL vhpsi_nc( lda, n, m, evc, hpsi )
+          ELSE
+             call vhpsi( lda, n, m, evc, hpsi )
+          ENDIF
+       ENDIF
+
+       !> PW/src/exx.f90
+       IF ( exx_is_active() ) THEN
+          ! if (ionode) then
+          !    write(*,'(1X,A)') "Adding the hybrid functional potential."
+          !    write(*,'(1X,A)')
+          ! endif
+          IF ( use_ace) THEN
+             IF (gamma_only) THEN
+                CALL vexxace_gamma(lda, m, evc, ee, hpsi)
+             ELSE
+                !> [BUGS HERE]
+                CALL vexxace_k(lda, m, evc, ee, hpsi)
+             END IF
+          ELSE
+             if (ionode) then
+                call errore ( 'write_vxc_tot_g', 'Only support ACE', 1 )
+             endif
+             CALL vexx( lda, n, m, evc, hpsi, becp )
+          END IF
+       END IF
+
+       ! ======
+       ! C := alpha*op( A )*op( B ) + beta*C,
+       ! zgemm(TRANSA, TRANSB, M, N, K, ALPHA, A, LDA, B, LDB, BETA, C, LDC)
+       ! hc = (evc).H . hpsi
+       CALL ZGEMM( 'C', 'N', nbnd, nbnd, kdim, ( 1.D0, 0.D0 ), evc, kdmx, hpsi, kdmx, ( 0.D0, 0.D0 ), hc, nbnd )
+
+       CALL mp_sum(  hc , intra_bgrp_comm )
+       ! CALL mp_sum(  hc , intra_pool_comm )
+
+       ! diagonal
+       if (ndiag .gt. 0) then
+          do ib = diag_nmin, diag_nmax
+             ! mtxeld in units of eV
+             mtxeld (ib - diag_nmin + 1, ik) = hc (ib, ib) * CMPLX (rytoev, 0.0D0)
+          enddo
+       endif
+
+       ! off-diagonal
+       if (noffdiag .gt. 0) then
+          do ib = offdiag_nmin, offdiag_nmax
+             do ib2 = offdiag_nmin, offdiag_nmax
+                ! mtxeld in units of eV
+                mtxelo (ib2-offdiag_nmin+1, ib-offdiag_nmin+1, ik) = hc (ib2, ib) * CMPLX (rytoev, 0.0D0)
+             enddo
+          enddo
+       endif
+
+    ENDDO ! ik_global
+
+    ! IF (nkb > 0) THEN
+    !    CALL deallocate_bec_type ( becp )
+    ! ENDIF
+
+    deallocate (hc)
+    DEALLOCATE (vxcr)
+    DEALLOCATE (kedtaur)
+
+    IF (ndiag .GT. 0) CALL mp_sum (mtxeld, inter_pool_comm)
+    IF (noffdiag .GT. 0) CALL mp_sum (mtxelo, inter_pool_comm)
+    ! xk(1:3) : cartesian ==> crytal
+    CALL cryst_to_cart (nkstot, xk, at, -1)
+
+    IF (ionode) THEN
+       OPEN (unit = unit, file = TRIM (output_file_name), &
+            form = 'formatted', status = 'replace')
+
+       if (nspin .eq. 4) then
+          nspin_ = 1
+       else
+          nspin_ = nspin
+       endif
+
+       DO ik = 1, nkstot / nspin_
+          WRITE (unit, 101) xk(:, ik), nspin_ * ndiag, &
+               nspin_ * noffdiag **2
+          DO is = 1, nspin_
+             IF (ndiag .GT. 0) THEN
+                DO ib = diag_nmin, diag_nmax
+                   WRITE (unit, 102) is, ib, mtxeld &
+                        (ib - diag_nmin + 1, ik + (is - 1) * nkstot / nspin_)
+                ENDDO
+             ENDIF
+             IF (noffdiag .GT. 0) THEN
+                DO ib = offdiag_nmin, offdiag_nmax
+                   DO ib2 = offdiag_nmin, offdiag_nmax
+                      WRITE (unit, 103) is, ib2, ib, mtxelo &
+                           (ib2 - offdiag_nmin + 1, ib - offdiag_nmin + 1, &
+                           ik + (is - 1) * nkstot / nspin_)
+                   ENDDO
+                ENDDO
+             ENDIF
+          ENDDO
+       ENDDO
+       CLOSE (unit = unit, status = 'keep')
+    ENDIF
+
+    ! xk(1:3) : crystal ==> cartesian
+    CALL cryst_to_cart (nkstot, xk, bg, 1)
+
+    IF (ndiag .GT. 0) DEALLOCATE (mtxeld)
+    IF (noffdiag .GT. 0) DEALLOCATE (mtxelo)
+
+    RETURN
+
+101 FORMAT (3F13.9, 2I8)
+102 FORMAT (2I8, 2F15.9)
+103 FORMAT (3I8, 2F15.9)
+
+  END SUBROUTINE write_vxc_tot_g
+
   !-------------------------------------------------------------------------------
 
   SUBROUTINE write_vhub_g (output_file_name, diag_nmin, diag_nmax, offdiag_nmin, offdiag_nmax)
@@ -3247,9 +3755,7 @@ CONTAINS
     USE kinds, ONLY : DP
     USE klist, ONLY : xk, nkstot, nks, ngk, igk_k
     USE lsda_mod, ONLY : nspin, isk, current_spin, lsda
-    ! ======
     USE ldaU, ONLY : lda_plus_u, U_projection, wfcU, offsetU, Hubbard_l, nwfcU, Hubbard_lmax, is_hubbard
-    ! ------
     USE mp, ONLY : mp_sum
     USE mp_pools, ONLY : inter_pool_comm
     USE mp_bands, ONLY : intra_bgrp_comm
@@ -3259,14 +3765,10 @@ CONTAINS
     USE wvfct, ONLY : npwx, nbnd
     USE noncollin_module , ONLY : noncolin , npol
     USE buffers, ONLY : get_buffer
-    ! ======
     USE scf, ONLY : v
     USE ions_base,            ONLY : nat, ityp
-    ! ======
-    USE becmod,               ONLY : bec_type, calbec, &
-         allocate_bec_type, deallocate_bec_type
+    ! USE becmod,               ONLY : bec_type, calbec, allocate_bec_type, deallocate_bec_type
 
-    ! ------
     IMPLICIT NONE
 
     character (len = 256), intent (in) :: output_file_name
@@ -4036,7 +4538,8 @@ CONTAINS
   !      local_pw = 0
   !      IF ( ik .GE. iks .AND. ik .LE. ike ) THEN
   !         npw = ngk ( ik - iks + 1 )
-  !         CALL init_us_2 ( npw, igk_k(1, ik-iks+1), xk ( 1, ik ), vkb )
+  !!         CALL init_us_2 ( npw, igk_k(1, ik-iks+1), xk ( 1, ik ), vkb )
+  !         CALL init_us_2 ( npw, igk_k(1, ik-iks+1), xk ( 1, ik-iks+1), vkb )
   !         local_pw = npw
   !      ENDIF
 
