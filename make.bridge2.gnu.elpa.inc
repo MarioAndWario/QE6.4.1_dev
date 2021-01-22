@@ -154,6 +154,8 @@ SCALAPACK_LIBS = $(ELPA_DIR)/lib/libelpa.a -L$(MKLROOT)/lib/intel64 -lmkl_scalap
 FFT_LIBS       = -L$(FFTW3_DIR) -lfftw3 -lfftw3_mpi
 
 # HDF5
+HDF5_DIR = /jet/packages/spack/opt/spack/linux-centos8-zen2/gcc-10.2.0/hdf5-1.10.7-3trwysszw4lw3tazizx2if2mg6567cro
+#/jet/packages/spack/opt/spack/linux-centos8-zen2/gcc-10.2.0/hdf5-1.10.7-mzmbykwwid5wyenbyx3z6kf56etuhbvi
 HDF5_LIB = -L$(HDF5_DIR)/lib -lhdf5hl_fortran -lhdf5_hl -lhdf5_fortran -lhdf5 -lz
 FOX_LIB  = -L$(TOPDIR)/FoX/lib  -lFoX_dom -lFoX_sax -lFoX_wxml -lFoX_common\
             -lFoX_utils -lFoX_fsys 
