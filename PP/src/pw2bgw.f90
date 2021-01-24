@@ -116,7 +116,7 @@ PROGRAM pw2bgw
   USE funct, ONLY: set_exx_fraction, set_screening_parameter, dft_is_hybrid, exx_is_active, stop_exx, dft_is_meta
   USE gvecw, ONLY : ecutwfc
   USE ions_base, ONLY : nat, atm, ityp, tau
-  USE symm_base, ONLY : s, ftau, nsym, ft, time_reversal, find_sym
+  USE symm_base, ONLY : s, ftau, nsym, ft !, time_reversal, find_sym
   USE start_k, ONLY : nk1, nk2, nk3
   USE loc_scdm, ONLY : use_scdm, localize_orbitals
   USE loc_scdm_k, ONLY : localize_orbitals_k
@@ -516,11 +516,14 @@ PROGRAM pw2bgw
      CALL orthoUwfc()
   ENDIF
 
-  allocate(m_loc(3,nat))
-  m_loc = 0.0D0
+  !> [important]
+  !> For magnetic structure, the following find_sym() will ruin the symmetry!!!
+  ! allocate(m_loc(3,nat))
+  ! m_loc = 0.0D0
   ! write(*,*) "time_reversal = ", time_reversal
-  CALL find_sym ( nat, tau, ityp, .not.time_reversal, m_loc)
-  deallocate(m_loc)
+  ! CALL find_sym ( nat, tau, ityp, .not.time_reversal, m_loc)
+  ! deallocate(m_loc)
+
   !> Initialize hybrid functional calculations
 
   ! IF (ecutfock <= 0.0_DP) THEN
