@@ -156,7 +156,7 @@ SUBROUTINE diag_bands( iter, ik, avg_iter )
   !
   USE kinds,                ONLY : DP
   USE buffers,              ONLY : get_buffer
-  USE io_global,            ONLY : stdout
+  USE io_global,            ONLY : stdout, ionode
   USE io_files,             ONLY : nwordwfc, iunefieldp, iunefieldm
   USE uspp,                 ONLY : vkb, nkb, okvan
   USE gvect,                ONLY : gstart
@@ -221,8 +221,12 @@ SUBROUTINE diag_bands( iter, ik, avg_iter )
   !
   ipw=npwx
   CALL mp_sum(ipw, intra_bgrp_comm)
-  IF ( nbndx > ipw ) &
+  IF ( nbndx > ipw ) THEN
+     if (ionode) then
+        write(*,'(A,I10,A,I10)') "nbndx = ", nbndx, " ipw = ", ipw
+     endif
      CALL errore ( 'diag_bands', 'too many bands, or too few plane waves',1)
+  ENDIF
   !
   ! ... allocate space for <beta_i|psi_j> - used in h_psi and s_psi
   !
