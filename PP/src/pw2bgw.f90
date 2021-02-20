@@ -234,6 +234,7 @@ PROGRAM pw2bgw
   vxc_diag_nmax = 0
   vxc_offdiag_nmin = 0
   vxc_offdiag_nmax = 0
+  vxc_tot_flag = .FALSE.
   vxc_tot_file = 'vxc_tot.dat'
   vxc_tot_diag_nmin = 0
   vxc_tot_diag_nmax = 0
