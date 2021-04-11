@@ -255,9 +255,9 @@ PROGRAM do_bands
   ! hinit0() contains gk_sort()
   !CALL hinit0()
   IF (gamma_only) CALL errore('bands','gamma_only case not implemented',1)
-  IF (nproc_pool /= nproc_pool_file) THEN
-     CALL errore('bands', 'pw.x run with a different number of procs/pools. Use wf_collect=.true.',1)
-  ENDIF
+  ! IF (nproc_pool /= nproc_pool_file) THEN
+  !    CALL errore('bands', 'pw.x run with a different number of procs/pools. Use wf_collect=.true.',1)
+  ! ENDIF
   IF (two_fermi_energies.or.i_cons /= 0) CALL errore('bands', 'The bands code with constrained magnetization has not been tested',1)
   IF ( ANY(lsigma) .AND. .NOT.noncolin ) CALL errore ('punch_band', 'lsigma requires noncollinear run', 1 )
   IF ( spin_component/=1 .and. nspin/=2 ) CALL errore('punch_bands','incorrect spin_component',1)
@@ -269,7 +269,7 @@ PROGRAM do_bands
      CALL punch_band_2d(filband,spin_component)
   ELSE
      !CALL punch_band(filband,spin_component,lsigma,no_overlap)
-     !IF (lsym) CALL sym_band(filband,spin_component,firstk,lastk)
+     IF (lsym) CALL sym_band(filband,spin_component,firstk,lastk)
      IF (lp) CALL write_p_avg(filp, spin_component, firstk, lastk, nvb, ncb, isbare, verbo, output_ppsi, restart_with_ppsi, qshift_, ppsi_v)
   END IF
   CALL environment_end ( 'BANDS' )

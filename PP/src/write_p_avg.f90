@@ -643,35 +643,35 @@ SUBROUTINE write_p_avg(filp, spin_component, firstk, lastk, nvb, ncb, isbare, ve
   ! < Allocate ppsi's
   if ( (.not. restart_with_ppsi) ) then
      ALLOCATE(ppsi(npwx*npol,nvnc))
-     ppsi = 0
+     ppsi = (0.0D0, 0.0D0)
 
      if (output_ppsi) then
         allocate(ppsi_out(2,npwx_max,npol,nvnc,3)) ! for each ik and iproc
-        ppsi_out = 0
+        ppsi_out = 0.0D0
      endif
 
      IF (okvan) THEN
         ALLOCATE(ppsi_us(npwx*npol,nvnc))
-        ppsi_us = 0
+        ppsi_us = (0.0D0, 0.0D0)
         if (output_ppsi) then
            ALLOCATE(ppsi_us_out(2,npwx_max,npol,nvnc,3))
-           ppsi_us_out = 0
+           ppsi_us_out = 0.0D0
         endif
      ENDIF
   else ! restart_with_ppsi = T
      ALLOCATE(ppsi(npwx_ket * npol, nvnc_ket))
-     ppsi = 0
+     ppsi = (0.0D0, 0.0D0)
      allocate(ppsi_in(2,npwx_max_ket,npol,nvnc_ket,3))
-     ppsi_in = 0
+     ppsi_in = 0.0D0
 
      ALLOCATE(ppsi_(npwx*npol,nvnc))
-     ppsi_ = 0
+     ppsi_ = (0.0D0, 0.0D0)
 
      IF (okvan) THEN
         ALLOCATE(ppsi_us(npwx_ket * npol, nvnc_ket))
-        ppsi_us = 0
+        ppsi_us = (0.0D0, 0.0D0)
         allocate(ppsi_us_in(2,npwx_max_ket,npol,nvnc_ket,3))
-        ppsi_us_in = 0
+        ppsi_us_in = 0.0D0
      ENDIF
   endif
 
@@ -689,7 +689,7 @@ SUBROUTINE write_p_avg(filp, spin_component, firstk, lastk, nvb, ncb, isbare, ve
 
   DO ik = nks1, nks2
 
-     matp(:,:,:) = 0.0D0
+     matp(:,:,:) = (0.0D0, 0.0D0)
 
      !
      !   Compute the number of occupated bands at this k point
@@ -861,13 +861,23 @@ SUBROUTINE write_p_avg(filp, spin_component, firstk, lastk, nvb, ncb, isbare, ve
         if ( (.not. restart_with_ppsi) ) then
            ! Compute \hat{p} | v > and \hat{p} | c >
            CALL compute_ppsi_vc(ppsi, ppsi_us, ik, ipol, nbnd_occ, nvb, ncb, spin_component)
+           !> [Important]
+           !> Zero out those ig > ngk(ik)
+           do ispinor = 1, npol
+              do ig = ngk(ik)+1, npwx
+                 ppsi(ig+(ispinor-1)*npwx, :)    = (0.0D0, 0.0D0)
+                 ppsi_us(ig+(ispinor-1)*npwx, :) = (0.0D0, 0.0D0)                 
+              enddo
+           enddo
            ! <- output_ppsi = T ->
            if (output_ppsi) then
               do ispinor = 1, npol
                  do ig = 1, npwx
                     do ib = 1, nvnc
-                       ppsi_out(1,ig,ispinor,ib,ipol) = dble(ppsi(ig*ispinor,ib))
-                       ppsi_out(2,ig,ispinor,ib,ipol) = DIMAG(ppsi(ig*ispinor,ib))
+                       ! ppsi_out(1,ig,ispinor,ib,ipol) = dble(ppsi(ig*ispinor,ib))
+                       ! ppsi_out(2,ig,ispinor,ib,ipol) = DIMAG(ppsi(ig*ispinor,ib))
+                       ppsi_out(1,ig,ispinor,ib,ipol) = dble(ppsi(ig+(ispinor-1)*npwx,ib))
+                       ppsi_out(2,ig,ispinor,ib,ipol) = DIMAG(ppsi(ig+(ispinor-1)*npwx,ib))
                     enddo
                  enddo
               enddo
@@ -875,8 +885,10 @@ SUBROUTINE write_p_avg(filp, spin_component, firstk, lastk, nvb, ncb, isbare, ve
                  do ispinor = 1, npol
                     do ig = 1, npwx
                        do ib = 1, nvnc
-                          ppsi_us_out(1,ig,ispinor,ib,ipol) = dble(ppsi_us(ig*ispinor,ib))
-                          ppsi_us_out(2,ig,ispinor,ib,ipol) = DIMAG(ppsi_us(ig*ispinor,ib))
+                          ! ppsi_us_out(1,ig,ispinor,ib,ipol) = dble(ppsi_us(ig*ispinor,ib))
+                          ! ppsi_us_out(2,ig,ispinor,ib,ipol) = DIMAG(ppsi_us(ig*ispinor,ib))
+                          ppsi_us_out(1,ig,ispinor,ib,ipol) = dble(ppsi_us(ig+(ispinor-1)*npwx,ib))
+                          ppsi_us_out(2,ig,ispinor,ib,ipol) = DIMAG(ppsi_us(ig+(ispinor-1)*npwx,ib))
                        enddo
                     enddo
                  enddo
@@ -934,7 +946,8 @@ SUBROUTINE write_p_avg(filp, spin_component, firstk, lastk, nvb, ncb, isbare, ve
            do ispinor = 1, npol
               do ig = 1, npwx_ket
                  do ib = 1, nvnc_ket
-                    ppsi(ig*ispinor,ib) = DCMPLX(ppsi_in(1,ig,ispinor,ib,ipol), ppsi_in(2,ig,ispinor,ib,ipol))
+                    ! ppsi(ig*ispinor,ib) = DCMPLX(ppsi_in(1,ig,ispinor,ib,ipol), ppsi_in(2,ig,ispinor,ib,ipol))
+                    ppsi(ig+(ispinor-1)*npwx_ket,ib) = DCMPLX(ppsi_in(1,ig,ispinor,ib,ipol), ppsi_in(2,ig,ispinor,ib,ipol))
                  enddo
               enddo
            enddo
@@ -943,7 +956,8 @@ SUBROUTINE write_p_avg(filp, spin_component, firstk, lastk, nvb, ncb, isbare, ve
               do ispinor = 1, npol
                  do ig = 1, npwx_ket
                     do ib = 1, nvnc_ket
-                       ppsi_us(ig*ispinor,ib) = DCMPLX(ppsi_us_in(1,ig,ispinor,ib,ipol), ppsi_in(2,ig,ispinor,ib,ipol))
+                       ! ppsi_us(ig*ispinor,ib) = DCMPLX(ppsi_us_in(1,ig,ispinor,ib,ipol), ppsi_in(2,ig,ispinor,ib,ipol))
+                       ppsi_us(ig+(ispinor-1)*npwx_ket,ib) = DCMPLX(ppsi_us_in(1,ig,ispinor,ib,ipol), ppsi_in(2,ig,ispinor,ib,ipol))
                     enddo
                  enddo
               enddo
