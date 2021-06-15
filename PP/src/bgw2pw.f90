@@ -74,6 +74,12 @@ PROGRAM bgw2pw
   USE mp, ONLY : mp_bcast
   USE mp_global, ONLY : mp_startup
   USE mp_world, ONLY : world_comm
+  USE noncollin_module,   ONLY : noncolin, m_loc, angle1, angle2, nspin_lsda
+  USE spin_orb,           ONLY : domag
+  USE ions_base,          ONLY : nat, tau, ityp
+  USE symm_base,          ONLY : nrot, nsym, s, t_rev, fft_fact, find_sym
+  USE lsda_mod,           ONLY : nspin, isk, lsda, starting_magnetization
+  USE extfield,           ONLY : gate
 
   IMPLICIT NONE
 
@@ -91,11 +97,12 @@ PROGRAM bgw2pw
        real_or_complex, wfng_flag, wfng_file, wfng_nband, &
        rhog_flag, rhog_file
 
-  integer :: ios
+  integer :: ios, na
   character ( len = 256 ) :: input_file_name
   character ( len = 256 ) :: output_dir_name
 
   character (len=256), external :: trimcheck
+  LOGICAL :: magnetic_sym
 
 #if defined(__MPI)
   CALL mp_startup ( )
@@ -136,6 +143,20 @@ PROGRAM bgw2pw
 
   CALL openfil_pp ( )
 
+  magnetic_sym = noncolin .AND. domag
+  ALLOCATE(m_loc(3,nat))
+  IF (noncolin.and.domag) THEN
+     DO na = 1, nat
+        m_loc(1,na) = starting_magnetization(ityp(na)) * &
+                      SIN( angle1(ityp(na)) ) * COS( angle2(ityp(na)) )
+        m_loc(2,na) = starting_magnetization(ityp(na)) * &
+                      SIN( angle1(ityp(na)) ) * SIN( angle2(ityp(na)) )
+        m_loc(3,na) = starting_magnetization(ityp(na)) * &
+                      COS( angle1(ityp(na)) )
+     ENDDO
+  ENDIF
+  CALL find_sym ( nat, tau, ityp, magnetic_sym, m_loc, gate )  
+  
   IF ( wfng_flag ) THEN
      input_file_name = TRIM ( tmp_dir ) // TRIM ( wfng_file )
      output_dir_name = TRIM ( tmp_dir ) // TRIM ( prefix ) // '.save'
@@ -199,7 +220,7 @@ CONTAINS
 #if defined(__MPI)
     USE parallel_include, ONLY : MPI_INTEGER, MPI_DOUBLE_COMPLEX
 #endif
-    USE wvfct, ONLY : npwx
+    USE wvfct, ONLY : npwx, nbnd, et, wg
 
     IMPLICIT NONE
 
@@ -356,7 +377,15 @@ CONTAINS
        DO is = 1, ns
           DO ik = 1, nk
              DO ib = 1, nb
-                en ( ib, ik, is ) = en ( ib, ik, is ) / 2.0D0
+                !> en in WFN in Ryd, et in WFN in Hartree
+                ! en ( ib, ik, is ) = en ( ib, ik, is ) / 2.0D0
+                et ( ib, ik+(is-1)*nk ) = en ( ib, ik, is )
+                if (ns == 1) then
+                   wg ( ib, ik+(is-1)*nk ) = oc ( ib, ik, is ) * 2
+                else
+                   !> [Need TESTING]
+                   wg ( ib, ik+(is-1)*nk ) = oc ( ib, ik, is )
+                endif
              ENDDO
           ENDDO
        ENDDO
@@ -364,8 +393,15 @@ CONTAINS
 
     CALL mp_bcast ( ngk_g, ionode_id, world_comm )
     CALL mp_bcast ( k, ionode_id, world_comm )
-    CALL mp_bcast ( en, ionode_id, world_comm )
-    CALL mp_bcast ( oc, ionode_id, world_comm )
+    !> [Important]
+    ! CALL mp_bcast ( en, ionode_id, world_comm )
+    CALL mp_bcast ( et, ionode_id, world_comm )
+
+    !> [TESTING]
+    ! et = 20.0
+    !> [Important]
+    ! CALL mp_bcast ( oc, ionode_id, world_comm )
+    CALL mp_bcast ( wg, ionode_id, world_comm )
     CALL mp_bcast ( gvec, ionode_id, world_comm )
 
     fg = 0
@@ -630,6 +666,9 @@ CONTAINS
        ENDDO
     ENDDO
 
+    !> PUNCH
+    CALL punch('all')    
+    
     DEALLOCATE ( ngk_g )
     DEALLOCATE ( k )
     DEALLOCATE ( en )
