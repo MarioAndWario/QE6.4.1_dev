@@ -255,6 +255,8 @@ CONTAINS
     USE noncollin_module , ONLY : noncolin , npol
     USE buffers,            ONLY : save_buffer, open_buffer, close_buffer
     USE wavefunctions, ONLY : evc, psic, psic_nc
+    USE scf,                ONLY : rho
+    USE io_rho_xml,         ONLY : write_scf
 
     IMPLICIT NONE
 
@@ -291,7 +293,7 @@ CONTAINS
     LOGICAL :: exst, opnd, exst_mem, magnetic_sym
 
     integer :: ig_evc, ig_g
-    
+
     CALL check_inversion ( real_or_complex, nsym, s, nspin, .true., .true. )
 
     IF ( ionode ) CALL iotk_free_unit ( iu )
@@ -317,7 +319,7 @@ CONTAINS
             ( ( bdot ( j, i ), j = 1, 3 ), i = 1, 3 )
 
        if (ns .eq. 2) then
-          CALL errore ( 'write_evc', 'do not support ns=2 for now', 1 )          
+          CALL errore ( 'write_evc', 'do not support ns=2 for now', 1 )
        endif
     ENDIF
 
@@ -623,8 +625,11 @@ CONTAINS
     nwordwfc = nbnd * npwx * npol
     CALL open_buffer(iunwfc, 'wfc', nwordwfc, +1, exst_mem, exst)
 
+    ! Write everything again with the new prefix
+    CALL write_scf(rho, nspin)
+
     write(*,*) "nk = ", nk
-    
+
     DO ik = 1, nk
 
        ! #if defined (__OLDXML)
@@ -640,9 +645,11 @@ CONTAINS
        !        ENDIF
 #if defined(__MPI)
        CALL mp_barrier ( world_comm )
-       CALL MPI_Gather ( igk_dist ( :, ik ) , ngkdist_l, MPI_INTEGER, &
-            igk_buf, ngkdist_l, MPI_INTEGER, &
-            ionode_id, world_comm, ierr )
+       ! CALL MPI_Gather ( igk_dist ( :, ik ) , ngkdist_l, MPI_INTEGER, &
+       !      igk_buf, ngkdist_l, MPI_INTEGER, &
+       !      ionode_id, world_comm, ierr )
+       CALL MPI_ALLGather ( igk_dist ( :, ik ) , ngkdist_l, MPI_INTEGER, &
+            igk_buf, ngkdist_l, MPI_INTEGER, world_comm, ierr )
        IF ( ierr .GT. 0 ) CALL errore ( 'write_evc', 'mpi_gather', ierr )
 #else
        DO ig = 1, ngkdist_g
@@ -701,34 +708,57 @@ CONTAINS
           DO ib = 1, nb
 #if defined(__MPI)
              CALL mp_barrier ( world_comm )
-             CALL MPI_Gather ( wfng_dist ( :, ib, is, ik ), ngkdist_l, MPI_DOUBLE_COMPLEX, &
-                  wfng_buf ( :, is ), ngkdist_l, MPI_DOUBLE_COMPLEX, &
-                  ionode_id, world_comm, ierr )
+             ! CALL MPI_Gather ( wfng_dist ( :, ib, is, ik ), ngkdist_l, MPI_DOUBLE_COMPLEX, &
+             !      wfng_buf ( :, is ), ngkdist_l, MPI_DOUBLE_COMPLEX, &
+             !      ionode_id, world_comm, ierr )
+             !> All proc now has wfng_buf
+             CALL MPI_ALLGather ( wfng_dist ( :, ib, is, ik ), ngkdist_l, MPI_DOUBLE_COMPLEX, &
+                  wfng_buf ( :, is ), ngkdist_l, MPI_DOUBLE_COMPLEX, world_comm, ierr )
              IF ( ierr .GT. 0 ) CALL errore ( 'write_evc', 'mpi_gather', ierr )
 #else
              DO ig = 1, ngkdist_g
                 wfng_buf ( ig, is ) = wfng_dist ( ig, ib, is, ik )
              ENDDO
 #endif
+
+             ! if (ib .eq. 1) then
+             !    if (ionode) then
+             !       write(*,*) "wfng_buf(:,ib=1)"
+             !       do ig_g = 1, ngkdist_g
+             !          write(*,'(3I5, 2ES20.10)') gvec(:,igk_buf(ig_g)), wfng_buf(ig_g,1)
+             !       enddo
+             !    endif
+             ! endif
+
              ! IF ( ionode ) CALL iotk_write_dat ( iu, "evc" // iotk_index ( ib ), wfng_buf ( 1 : ngk_g ( ik ), is ) )
 
              !> [ns = 2?]
              !> [SOC?]
              !> ALLOCATE ( wfng_buf ( ngkdist_g, ns ) )
              DO ig_evc = 1, ngk(ik)
-                DO ig_g = 1, ngkdist_g
+                if (ig_l2g(igk_k(ig_evc,ik)) <= 0) then
+                   continue
+                endif
+                loop_ig: DO ig_g = 1, ngkdist_g
                    !> igk_l2g(ig_evc, ik) ==> index in gvec(1:3,1:ngm_g)
+                   if (igk_buf(ig_g) <= 0) then
+                      continue
+                   endif
                    if (ig_l2g(igk_k(ig_evc,ik)) .eq. igk_buf(ig_g)) then
                       evc(ig_evc, ib) = wfng_buf(ig_g, is)
+                      exit loop_ig
                    endif
-                ENDDO
-             ENDDO             
+                ENDDO loop_ig
+             ENDDO
           ENDDO
 
-          !> [???]
-          write(*,*) "evc recovered:"
-          write(*,'(2ES20.10)') evc(:,:)
-          
+          ! if (ionode) then
+          !    write(*,*) "evc recovered: ib = 1"
+          !    do ig_evc = 1, ngk(ik)
+          !       write(*,'(3I5, 2ES20.10, 2I5,A,I5, 2ES20.10)') gvec(:,ig_l2g(igk_k(ig_evc,ik))), evc(ig_evc,1), igk_k(ig_evc,ik), ig_l2g(igk_k(ig_evc,ik)), " igk_buf(1) = ", igk_buf(1), wfng_buf(1, is)
+          !    enddo
+          ! endif
+
           CALL save_buffer( evc, nwordwfc, iunwfc, ik + (is-1)*nk )
 
           ! IF ( ionode ) CALL iotk_close_write ( iu )

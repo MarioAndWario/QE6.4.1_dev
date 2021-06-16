@@ -1821,6 +1821,7 @@ CONTAINS
 
                 ! write(*,'(1X,A,I5,A,I5,A,2ES20.12)') "ik #", ik, " ib #", ib, " NORM = ", norm
                 IF ( ABS(DBLE(norm)-1.0D0) > norm_tol ) THEN
+                   ! write(*,'(2ES20.10)') wfng(ig)
                    write(*,'(1X,A,I5,A,I5,A,ES20.12)') "ik #", ik, " ib #", ib, " RE[NORM] = ", DBLE(norm)
                    call exit(4321)
                 ENDIF
