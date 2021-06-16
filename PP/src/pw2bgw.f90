@@ -2405,6 +2405,9 @@ CONTAINS
        ELSE
           WRITE ( unit ) ( ( rhog_g ( ig, is ), &
                ig = 1, ng_g ), is = 1, ns )
+
+          ! WRITE (*,'(2ES20.12)') ( ( rhog_g ( ig, is ), &
+          !      ig = 1, ng_g ), is = 1, ns )          
        ENDIF
        CLOSE ( unit = unit, status = 'keep' )
     ENDIF
