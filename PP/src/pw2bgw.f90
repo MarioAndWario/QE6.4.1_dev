@@ -100,7 +100,7 @@ PROGRAM pw2bgw
   USE constants, ONLY : eps12
   USE control_flags, ONLY : gamma_only
   USE environment, ONLY : environment_start, environment_end
-  USE io_files, ONLY : prefix, tmp_dir
+  USE io_files, ONLY : prefix, tmp_dir, nwordwfc, iunwfc
   USE io_global, ONLY : ionode, ionode_id
   USE kinds, ONLY : DP
   USE lsda_mod, ONLY : nspin
@@ -1547,6 +1547,8 @@ CONTAINS
           CALL davcio ( evc, 2*nwordwfc, iunwfc, ik - iks + 1, - 1 )
           !! local_pw = ng_local : local number of G vectors for a given kpoint = ngk(ik_local)
           local_pw = ngk ( ik - iks + 1 )
+          ! write(*,*) "evc:"
+          ! write(*,'(2ES20.10)') evc(:,:)
        ENDIF
 
        !! igwf_l2g (1:ng_local) is a local map, the domain is the local

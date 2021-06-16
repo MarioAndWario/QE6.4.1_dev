@@ -141,22 +141,52 @@ PROGRAM bgw2pw
 
   CALL read_file ( )
 
-  CALL openfil_pp ( )
+  ! CALL openfil_pp ( )
 
-  magnetic_sym = noncolin .AND. domag
-  ALLOCATE(m_loc(3,nat))
-  IF (noncolin.and.domag) THEN
-     DO na = 1, nat
-        m_loc(1,na) = starting_magnetization(ityp(na)) * &
-                      SIN( angle1(ityp(na)) ) * COS( angle2(ityp(na)) )
-        m_loc(2,na) = starting_magnetization(ityp(na)) * &
-                      SIN( angle1(ityp(na)) ) * SIN( angle2(ityp(na)) )
-        m_loc(3,na) = starting_magnetization(ityp(na)) * &
-                      COS( angle1(ityp(na)) )
-     ENDDO
-  ENDIF
-  CALL find_sym ( nat, tau, ityp, magnetic_sym, m_loc, gate )  
-  
+  ! CALL open_buffer(iunwfc, 'wfc', nwordwfc, io_level, exst_mem, exst)
+  ! !
+  ! WRITE(stdout,*)
+  ! IF ( npool > 1 .and. nspin_mag>1) CALL errore( 'open_grid', &
+  !      'pools+spin not implemented, run this tool with only one pool', npool )
+  ! !
+  ! IF(gamma_only) CALL errore("open_grid", &
+  !      "not implemented, and pointless, for gamma-only",1)
+  ! !
+  ! ! Store some variables related to exx to be put back before writing
+  ! use_ace_back = use_ace
+  ! ecutfock_back = ecutfock
+  ! nq_back = (/ nq1, nq2, nq3 /)
+  ! exx_status_back = .true.
+  ! CALL dft_force_hybrid(exx_status_back)
+
+  ! magnetic_sym = noncolin .AND. domag
+  ! ALLOCATE(m_loc(3,nat))
+  ! IF (noncolin.and.domag) THEN
+  !    DO na = 1, nat
+  !       m_loc(1,na) = starting_magnetization(ityp(na)) * &
+  !            SIN( angle1(ityp(na)) ) * COS( angle2(ityp(na)) )
+  !       m_loc(2,na) = starting_magnetization(ityp(na)) * &
+  !            SIN( angle1(ityp(na)) ) * SIN( angle2(ityp(na)) )
+  !       m_loc(3,na) = starting_magnetization(ityp(na)) * &
+  !            COS( angle1(ityp(na)) )
+  !    ENDDO
+  ! ENDIF
+  ! CALL find_sym ( nat, tau, ityp, magnetic_sym, m_loc, gate )
+
+  ! nq1 = -1
+  ! nq2 = -1
+  ! nq3 = -1
+  ! ecutfock = 4*ecutwfc
+  ! use_ace = .false.
+
+  ! CALL exx_grid_init()
+  ! CALL exx_mp_init()
+  ! !
+  ! CALL exxinit(.false.)
+  ! qnorm = 0._dp
+  ! !
+  ! CALL close_buffer(iunwfc,'keep')
+
   IF ( wfng_flag ) THEN
      input_file_name = TRIM ( tmp_dir ) // TRIM ( wfng_file )
      output_dir_name = TRIM ( tmp_dir ) // TRIM ( prefix ) // '.save'
@@ -203,6 +233,7 @@ CONTAINS
     USE fft_base, ONLY : dfftp
     USE gvect, ONLY : ngm, ngm_g, ig_l2g, mill, g
     USE io_global, ONLY : ionode, ionode_id
+    USE io_files,   ONLY : prefix, tmp_dir, nwordwfc, iunwfc, diropn
     USE ions_base, ONLY : nat
     USE iotk_module, ONLY : iotk_attlenx, iotk_free_unit, iotk_open_write, &
          iotk_write_begin, iotk_write_attr, iotk_write_empty, iotk_write_dat, &
@@ -221,6 +252,9 @@ CONTAINS
     USE parallel_include, ONLY : MPI_INTEGER, MPI_DOUBLE_COMPLEX
 #endif
     USE wvfct, ONLY : npwx, nbnd, et, wg
+    USE noncollin_module , ONLY : noncolin , npol
+    USE buffers,            ONLY : save_buffer, open_buffer, close_buffer
+    USE wavefunctions, ONLY : evc, psic, psic_nc
 
     IMPLICIT NONE
 
@@ -231,7 +265,7 @@ CONTAINS
 
     logical :: f1, f2
     integer :: ierr, i, j, iu, ik, is, ib, ig, jg, fg, ir, &
-         na, nk, ns, nb, nbgw, ng, ngkmax, ntran, cell_symmetry, &
+         na, nk, ns, nb, nbgw, ng, npwx_g, ntran, cell_symmetry, &
          iks, ike, npw, npw_g, ngkdist_l, ngkdist_g, &
          igk_l2g, irecord, nrecord, ng_irecord, nr ( 3 )
     integer :: global_kpoint_index
@@ -254,7 +288,10 @@ CONTAINS
     complex ( DP ), allocatable :: wfngc ( :, : )
     complex ( DP ), allocatable :: wfng_buf ( :, : )
     complex ( DP ), allocatable :: wfng_dist ( :, :, :, : )
+    LOGICAL :: exst, opnd, exst_mem, magnetic_sym
 
+    integer :: ig_evc, ig_g
+    
     CALL check_inversion ( real_or_complex, nsym, s, nspin, .true., .true. )
 
     IF ( ionode ) CALL iotk_free_unit ( iu )
@@ -272,12 +309,16 @@ CONTAINS
          CALL errore ( 'write_evc', 'file header', 1 )
 
     IF ( ionode ) THEN
-       READ ( iu ) ns, ng, ntran, cell_symmetry, na, ecutrho, nk, nb, ngkmax, ecutwfn
+       READ ( iu ) ns, ng, ntran, cell_symmetry, na, ecutrho, nk, nb, npwx_g, ecutwfn
        READ ( iu ) ( nr ( ir ), ir = 1, 3 )
        READ ( iu ) celvol, al, ( ( a ( j, i ), j = 1, 3 ), i = 1, 3 ), &
             ( ( adot ( j, i ), j = 1, 3 ), i = 1, 3 )
        READ ( iu ) recvol, bl, ( ( b ( j, i ), j = 1, 3 ), i = 1, 3 ), &
             ( ( bdot ( j, i ), j = 1, 3 ), i = 1, 3 )
+
+       if (ns .eq. 2) then
+          CALL errore ( 'write_evc', 'do not support ns=2 for now', 1 )          
+       endif
     ENDIF
 
     CALL mp_bcast ( ns, ionode_id, world_comm )
@@ -288,7 +329,7 @@ CONTAINS
     CALL mp_bcast ( ecutrho, ionode_id, world_comm )
     CALL mp_bcast ( nk, ionode_id, world_comm )
     CALL mp_bcast ( nb, ionode_id, world_comm )
-    CALL mp_bcast ( ngkmax, ionode_id, world_comm )
+    CALL mp_bcast ( npwx_g, ionode_id, world_comm )
     CALL mp_bcast ( ecutwfn, ionode_id, world_comm )
     CALL mp_bcast ( nr, ionode_id, world_comm )
     CALL mp_bcast ( celvol, ionode_id, world_comm )
@@ -328,12 +369,14 @@ CONTAINS
     nbgw = nb
     IF ( wfng_nband .GT. 0 .AND. wfng_nband .LT. nb ) nb = wfng_nband
 
-    IF ( MOD ( ngkmax, nproc ) .EQ. 0 ) THEN
-       ngkdist_l = ngkmax / nproc
+    IF ( MOD ( npwx_g, nproc ) .EQ. 0 ) THEN
+       ngkdist_l = npwx_g / nproc
     ELSE
-       ngkdist_l = ngkmax / nproc + 1
+       ngkdist_l = npwx_g / nproc + 1
     ENDIF
     ngkdist_g = ngkdist_l * nproc
+
+    write(*,*) "ngkdist_l = ", ngkdist_l, " npwx = ", npwx, " nk = ", nk, " ngk = ", ngk
 
     ALLOCATE ( ngk_g ( nk ) )
     ALLOCATE ( k ( 3, nk ) )
@@ -345,9 +388,9 @@ CONTAINS
     ALLOCATE ( gk_buf ( 3, ngkdist_g ) )
     ALLOCATE ( gk_dist ( 3, ngkdist_l ) )
     IF ( real_or_complex .EQ. 1 ) THEN
-       ALLOCATE ( wfngr ( ngkmax, ns ) )
+       ALLOCATE ( wfngr ( npwx_g, ns ) )
     ELSE
-       ALLOCATE ( wfngc ( ngkmax, ns ) )
+       ALLOCATE ( wfngc ( npwx_g, ns ) )
     ENDIF
     ALLOCATE ( wfng_buf ( ngkdist_g, ns ) )
     ALLOCATE ( wfng_dist ( ngkdist_l, nb, ns, nk ) )
@@ -365,6 +408,7 @@ CONTAINS
        READ ( iu ) ( ( ( oc ( ib, ik, is ), ib = 1, nb ), ik = 1, nk ), is = 1, ns )
        READ ( iu ) nrecord
        ig = 1
+       !> [Important]
        DO irecord = 1, nrecord
           READ ( iu ) ng_irecord
           READ ( iu ) ( ( gvec ( ir, jg ), ir = 1, 3 ), jg = ig, ig + ng_irecord - 1 )
@@ -396,9 +440,6 @@ CONTAINS
     !> [Important]
     ! CALL mp_bcast ( en, ionode_id, world_comm )
     CALL mp_bcast ( et, ionode_id, world_comm )
-
-    !> [TESTING]
-    ! et = 20.0
     !> [Important]
     ! CALL mp_bcast ( oc, ionode_id, world_comm )
     CALL mp_bcast ( wg, ionode_id, world_comm )
@@ -465,9 +506,11 @@ CONTAINS
 
        DO ib = 1, nb
           IF ( ionode ) THEN
+             !> nrecord = 1
              READ ( iu ) nrecord
              ig = 1
              DO irecord = 1, nrecord
+                !> ng_irecord = ngk_g(ik)
                 READ ( iu ) ng_irecord
                 IF ( real_or_complex .EQ. 1 ) THEN
                    READ ( iu ) ( ( wfngr ( jg, is ), jg = ig, ig + ng_irecord - 1 ), is = 1, ns )
@@ -508,6 +551,7 @@ CONTAINS
 #endif
        ENDDO
 
+       !> [??????]
        IF ( ik .LT. nk ) THEN
           DO ib = nb + 1, nbgw
              IF ( ionode ) THEN
@@ -549,45 +593,51 @@ CONTAINS
     ENDDO
     CALL mp_max ( npw_g, world_comm )
 
-!     CALL create_directory ( output_dir_name )
-! #if defined (__OLDXML)
-!     DO ik = 1, nk
-!        CALL create_directory (qexml_kpoint_dirname( output_dir_name, ik ) )
-!     ENDDO
-! #else
-!     CALL errore('bgw2pw','XSD implementation pending',1)
-! #endif
+    !     CALL create_directory ( output_dir_name )
+    ! #if defined (__OLDXML)
+    !     DO ik = 1, nk
+    !        CALL create_directory (qexml_kpoint_dirname( output_dir_name, ik ) )
+    !     ENDDO
+    ! #else
+    !     CALL errore('bgw2pw','XSD implementation pending',1)
+    ! #endif
 
-!     filename = TRIM ( output_dir_name ) // '/gvectors.dat'
+    !     filename = TRIM ( output_dir_name ) // '/gvectors.dat'
 
-!     IF ( ionode ) THEN
-!        CALL iotk_open_write ( iu, FILE = TRIM ( filename ), SKIP_ROOT = .TRUE., BINARY = .TRUE. )
-!        CALL iotk_write_begin ( iu, "G-VECTORS" )
-!        CALL iotk_write_attr ( attr, "nr1s", nr ( 1 ), FIRST = .TRUE. )
-!        CALL iotk_write_attr ( attr, "nr2s", nr ( 2 ) )
-!        CALL iotk_write_attr ( attr, "nr3s", nr ( 3 ) )
-!        CALL iotk_write_attr ( attr, "gvect_number", ng )
-!        CALL iotk_write_attr ( attr, "gamma_only", .FALSE. )
-!        CALL iotk_write_attr ( attr, "units", "crystal" )
-!        CALL iotk_write_empty ( iu, "INFO", ATTR = attr )
-!        CALL iotk_write_dat ( iu, "g", gvec ( 1 : 3, 1 : ng ), COLUMNS = 3 )
-!        CALL iotk_write_end ( iu, "G-VECTORS" )
-!        CALL iotk_close_write ( iu )
-!     ENDIF
+    !     IF ( ionode ) THEN
+    !        CALL iotk_open_write ( iu, FILE = TRIM ( filename ), SKIP_ROOT = .TRUE., BINARY = .TRUE. )
+    !        CALL iotk_write_begin ( iu, "G-VECTORS" )
+    !        CALL iotk_write_attr ( attr, "nr1s", nr ( 1 ), FIRST = .TRUE. )
+    !        CALL iotk_write_attr ( attr, "nr2s", nr ( 2 ) )
+    !        CALL iotk_write_attr ( attr, "nr3s", nr ( 3 ) )
+    !        CALL iotk_write_attr ( attr, "gvect_number", ng )
+    !        CALL iotk_write_attr ( attr, "gamma_only", .FALSE. )
+    !        CALL iotk_write_attr ( attr, "units", "crystal" )
+    !        CALL iotk_write_empty ( iu, "INFO", ATTR = attr )
+    !        CALL iotk_write_dat ( iu, "g", gvec ( 1 : 3, 1 : ng ), COLUMNS = 3 )
+    !        CALL iotk_write_end ( iu, "G-VECTORS" )
+    !        CALL iotk_close_write ( iu )
+    !     ENDIF
 
+    prefix = TRIM(prefix)//"_open"
+    nwordwfc = nbnd * npwx * npol
+    CALL open_buffer(iunwfc, 'wfc', nwordwfc, +1, exst_mem, exst)
+
+    write(*,*) "nk = ", nk
+    
     DO ik = 1, nk
 
-! #if defined (__OLDXML)
-!        filename = TRIM ( qexml_wfc_filename ( output_dir_name, 'gkvectors', ik ) )
-! #endif
-!        IF ( ionode ) THEN
-!           CALL iotk_open_write ( iu, FILE = TRIM ( filename ), ROOT="GK-VECTORS", BINARY = .TRUE. )
-!           CALL iotk_write_dat ( iu, "NUMBER_OF_GK-VECTORS", ngk_g ( ik ) )
-!           CALL iotk_write_dat ( iu, "MAX_NUMBER_OF_GK-VECTORS", ngkmax )
-!           CALL iotk_write_dat ( iu, "GAMMA_ONLY", .FALSE. )
-!           CALL iotk_write_attr ( attr, "UNITS", "2 pi / a", FIRST = .TRUE. )
-!           CALL iotk_write_dat ( iu, "K-POINT_COORDS", k ( :, ik ), ATTR = attr )
-!        ENDIF
+       ! #if defined (__OLDXML)
+       !        filename = TRIM ( qexml_wfc_filename ( output_dir_name, 'gkvectors', ik ) )
+       ! #endif
+       !        IF ( ionode ) THEN
+       !           CALL iotk_open_write ( iu, FILE = TRIM ( filename ), ROOT="GK-VECTORS", BINARY = .TRUE. )
+       !           CALL iotk_write_dat ( iu, "NUMBER_OF_GK-VECTORS", ngk_g ( ik ) )
+       !           CALL iotk_write_dat ( iu, "MAX_NUMBER_OF_GK-VECTORS", npwx_g )
+       !           CALL iotk_write_dat ( iu, "GAMMA_ONLY", .FALSE. )
+       !           CALL iotk_write_attr ( attr, "UNITS", "2 pi / a", FIRST = .TRUE. )
+       !           CALL iotk_write_dat ( iu, "K-POINT_COORDS", k ( :, ik ), ATTR = attr )
+       !        ENDIF
 #if defined(__MPI)
        CALL mp_barrier ( world_comm )
        CALL MPI_Gather ( igk_dist ( :, ik ) , ngkdist_l, MPI_INTEGER, &
@@ -606,45 +656,47 @@ CONTAINS
        ! ENDIF
 
        DO is = 1, ns
-! #if defined (__OLDXML)
-!           IF ( ns .GT. 1 ) THEN
-!              filename = TRIM ( qexml_wfc_filename ( output_dir_name, 'eigenval', ik, is, EXTENSION = 'xml' ) )
-!           ELSE
-!              filename = TRIM ( qexml_wfc_filename ( output_dir_name, 'eigenval', ik, EXTENSION = 'xml' ) )
-!           ENDIF
-! #endif
-!           IF ( ionode ) THEN
-!              CALL iotk_open_write ( iu, FILE = TRIM ( filename ), BINARY = .FALSE. )
-!              CALL iotk_write_attr ( attr, "nbnd", nb, FIRST = .TRUE. )
-!              CALL iotk_write_attr ( attr, "ik", ik )
-!              IF ( ns .GT. 1 ) CALL iotk_write_attr ( attr, "ispin", is )
-!              CALL iotk_write_empty ( iu, "INFO", ATTR = attr )
-!              CALL iotk_write_attr ( attr, "UNITS", "Hartree", FIRST = .TRUE. )
-!              CALL iotk_write_empty ( iu, "UNITS_FOR_ENERGIES", ATTR = attr )
-!              CALL iotk_write_dat ( iu, "EIGENVALUES", en ( :, ik, is ) )
-!              CALL iotk_write_dat ( iu, "OCCUPATIONS", oc ( :, ik, is ) )
-!              CALL iotk_close_write ( iu )
-!           ENDIF
-! #if defined (__OLDXML)
-!           IF ( ns .GT. 1 ) THEN
-!              filename = TRIM ( qexml_wfc_filename ( output_dir_name, 'evc', ik, is ) )
-!           ELSE
-!              filename = TRIM ( qexml_wfc_filename ( output_dir_name, 'evc', ik ) )
-!           ENDIF
-! #endif
-!           IF ( ionode ) THEN
-!              CALL iotk_open_write ( iu, FILE = TRIM ( filename ), ROOT = "WFC", BINARY = .TRUE. )
-!              CALL iotk_write_attr ( attr, "ngw", npw_g, FIRST = .TRUE. )
-!              CALL iotk_write_attr ( attr, "igwx", ngk_g ( ik ) )
-!              CALL iotk_write_attr ( attr, "gamma_only", .FALSE. )
-!              CALL iotk_write_attr ( attr, "nbnd", nb )
-!              CALL iotk_write_attr ( attr, "ik", ik )
-!              CALL iotk_write_attr ( attr, "nk", nk )
-!              CALL iotk_write_attr ( attr, "ispin", is )
-!              CALL iotk_write_attr ( attr, "nspin", ns )
-!              CALL iotk_write_attr ( attr, "scale_factor", 1.0D0 )
-!              CALL iotk_write_empty ( iu, "INFO", attr )
-!           ENDIF
+          ! #if defined (__OLDXML)
+          !           IF ( ns .GT. 1 ) THEN
+          !              filename = TRIM ( qexml_wfc_filename ( output_dir_name, 'eigenval', ik, is, EXTENSION = 'xml' ) )
+          !           ELSE
+          !              filename = TRIM ( qexml_wfc_filename ( output_dir_name, 'eigenval', ik, EXTENSION = 'xml' ) )
+          !           ENDIF
+          ! #endif
+          !           IF ( ionode ) THEN
+          !              CALL iotk_open_write ( iu, FILE = TRIM ( filename ), BINARY = .FALSE. )
+          !              CALL iotk_write_attr ( attr, "nbnd", nb, FIRST = .TRUE. )
+          !              CALL iotk_write_attr ( attr, "ik", ik )
+          !              IF ( ns .GT. 1 ) CALL iotk_write_attr ( attr, "ispin", is )
+          !              CALL iotk_write_empty ( iu, "INFO", ATTR = attr )
+          !              CALL iotk_write_attr ( attr, "UNITS", "Hartree", FIRST = .TRUE. )
+          !              CALL iotk_write_empty ( iu, "UNITS_FOR_ENERGIES", ATTR = attr )
+          !              CALL iotk_write_dat ( iu, "EIGENVALUES", en ( :, ik, is ) )
+          !              CALL iotk_write_dat ( iu, "OCCUPATIONS", oc ( :, ik, is ) )
+          !              CALL iotk_close_write ( iu )
+          !           ENDIF
+          ! #if defined (__OLDXML)
+          !           IF ( ns .GT. 1 ) THEN
+          !              filename = TRIM ( qexml_wfc_filename ( output_dir_name, 'evc', ik, is ) )
+          !           ELSE
+          !              filename = TRIM ( qexml_wfc_filename ( output_dir_name, 'evc', ik ) )
+          !           ENDIF
+          ! #endif
+          !           IF ( ionode ) THEN
+          !              CALL iotk_open_write ( iu, FILE = TRIM ( filename ), ROOT = "WFC", BINARY = .TRUE. )
+          !              CALL iotk_write_attr ( attr, "ngw", npw_g, FIRST = .TRUE. )
+          !              CALL iotk_write_attr ( attr, "igwx", ngk_g ( ik ) )
+          !              CALL iotk_write_attr ( attr, "gamma_only", .FALSE. )
+          !              CALL iotk_write_attr ( attr, "nbnd", nb )
+          !              CALL iotk_write_attr ( attr, "ik", ik )
+          !              CALL iotk_write_attr ( attr, "nk", nk )
+          !              CALL iotk_write_attr ( attr, "ispin", is )
+          !              CALL iotk_write_attr ( attr, "nspin", ns )
+          !              CALL iotk_write_attr ( attr, "scale_factor", 1.0D0 )
+          !              CALL iotk_write_empty ( iu, "INFO", attr )
+          !           ENDIF
+
+          evc = (0.0D0, 0.0D0)
 
           DO ib = 1, nb
 #if defined(__MPI)
@@ -659,16 +711,33 @@ CONTAINS
              ENDDO
 #endif
              ! IF ( ionode ) CALL iotk_write_dat ( iu, "evc" // iotk_index ( ib ), wfng_buf ( 1 : ngk_g ( ik ), is ) )
+
+             !> [ns = 2?]
+             !> [SOC?]
+             !> ALLOCATE ( wfng_buf ( ngkdist_g, ns ) )
+             DO ig_evc = 1, ngk(ik)
+                DO ig_g = 1, ngkdist_g
+                   !> igk_l2g(ig_evc, ik) ==> index in gvec(1:3,1:ngm_g)
+                   if (ig_l2g(igk_k(ig_evc,ik)) .eq. igk_buf(ig_g)) then
+                      evc(ig_evc, ib) = wfng_buf(ig_g, is)
+                   endif
+                ENDDO
+             ENDDO             
           ENDDO
 
-          ! IF ( ionode ) CALL iotk_close_write ( iu )
+          !> [???]
+          write(*,*) "evc recovered:"
+          write(*,'(2ES20.10)') evc(:,:)
+          
+          CALL save_buffer( evc, nwordwfc, iunwfc, ik + (is-1)*nk )
 
-       ENDDO
-    ENDDO
+          ! IF ( ionode ) CALL iotk_close_write ( iu )
+       ENDDO ! ib
+    ENDDO ! is
 
     !> PUNCH
-    CALL punch('all')    
-    
+    CALL punch('all')
+
     DEALLOCATE ( ngk_g )
     DEALLOCATE ( k )
     DEALLOCATE ( en )
