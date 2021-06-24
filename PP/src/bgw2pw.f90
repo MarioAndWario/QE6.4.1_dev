@@ -239,7 +239,7 @@ CONTAINS
          iotk_write_begin, iotk_write_attr, iotk_write_empty, iotk_write_dat, &
          iotk_write_end, iotk_close_write, iotk_index
     USE kinds, ONLY : DP
-    USE klist, ONLY : xk, nks, nkstot, ngk, igk_k
+    USE klist, ONLY : xk, wk, nks, nkstot, ngk, igk_k
     USE lsda_mod, ONLY : nspin
     USE mp, ONLY : mp_bcast, mp_sum, mp_max, mp_barrier
     USE mp_world, ONLY : world_comm, nproc
@@ -378,7 +378,7 @@ CONTAINS
     ENDIF
     ngkdist_g = ngkdist_l * nproc
 
-    write(*,*) "ngkdist_l = ", ngkdist_l, " npwx = ", npwx, " nk = ", nk, " ngk = ", ngk
+    ! write(*,*) "ngkdist_l = ", ngkdist_l, " npwx = ", npwx, " nk = ", nk, " ngk = ", ngk
 
     ALLOCATE ( ngk_g ( nk ) )
     ALLOCATE ( k ( 3, nk ) )
@@ -421,16 +421,19 @@ CONTAINS
     IF ( ionode ) THEN
        CALL cryst_to_cart ( nk, k, bg, 1 )
        DO is = 1, ns
+          !> This is possible since we only one k pool
           DO ik = 1, nk
              DO ib = 1, nb
                 !> en in WFN in Ryd, et in WFN in Hartree
                 ! en ( ib, ik, is ) = en ( ib, ik, is ) / 2.0D0
                 et ( ib, ik+(is-1)*nk ) = en ( ib, ik, is )
                 if (ns == 1) then
-                   wg ( ib, ik+(is-1)*nk ) = oc ( ib, ik, is ) * 2
+                   ! wg ( ib, ik+(is-1)*nk ) = oc ( ib, ik, is ) * 2
+                   wg ( ib, ik+(is-1)*nk ) = oc ( ib, ik, is ) * wk(ik)
                 else
                    !> [Need TESTING]
-                   wg ( ib, ik+(is-1)*nk ) = oc ( ib, ik, is )
+                   ! wg ( ib, ik+(is-1)*nk ) = oc ( ib, ik, is )
+                   wg ( ib, ik+(is-1)*nk ) = oc ( ib, ik, is ) * wk(ik) / 2.0
                 endif
              ENDDO
           ENDDO
@@ -621,14 +624,14 @@ CONTAINS
     !        CALL iotk_close_write ( iu )
     !     ENDIF
 
-    prefix = TRIM(prefix)//"_open"
+    prefix = TRIM(prefix)//"_newwfn"
     nwordwfc = nbnd * npwx * npol
     CALL open_buffer(iunwfc, 'wfc', nwordwfc, +1, exst_mem, exst)
 
     ! Write everything again with the new prefix
     ! CALL write_scf(rho, nspin)
 
-    write(*,*) "nk = ", nk
+    ! write(*,*) "nk = ", nk
 
     DO ik = 1, nk
 
@@ -1033,7 +1036,7 @@ CONTAINS
     DEALLOCATE ( gvec )
 
     ! CALL write_rho ( output_dir_name, rho%of_r, nspin )
-    prefix = TRIM(prefix)//"_cd"    
+    prefix = TRIM(prefix)//"_newrho"    
     CALL write_scf(rho, nspin)
 
     RETURN
